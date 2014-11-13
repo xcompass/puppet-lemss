@@ -1,0 +1,7 @@
+fixtures:
+  symlinks:
+    "lemss": "#{source_dir}"
+  forge_modules:
+    "stdlib": "puppetlabs/stdlib"
+    "wget":   "maestrodev/wget"
+    "java":   "puppetlabs/java"

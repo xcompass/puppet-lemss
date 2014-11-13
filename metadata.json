@@ -1,0 +1,21 @@
+{
+  "name": "compass-lemss",
+  "version": "0.1.0",
+  "author": "Pan Luo",
+  "summary": "Manage LEMSS agent",
+  "license": "Apache 2.0",
+  "source": "https://github.com/xcompass/puppet-lemss.git",
+  "project_page": "https://github.com/xcompass/puppet-lemss",
+  "issues_url": "https://github.com/xcompass/puppet-lemss/issues",
+  "requirements": [
+    {
+      "name": "puppet",
+      "version_requirement": "3.x"
+    }
+  ],
+  "dependencies": [
+    {"name":"puppetlabs-java","version_requirement":">= 1.2.0"},
+    {"name":"maestrodev-wget","version_requirement":">= 1.5.6"}
+  ]
+}
+

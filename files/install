@@ -1,0 +1,3214 @@
+#!/bin/sh
+#Test
+#
+# (C) PatchLink Corporation 1997-2006 All Rights Reserved
+#
+#
+################################################################################
+#         This script installs the PatchLink Update Agent
+################################################################################
+#
+#  USAGE:
+#
+#  Manual Install:
+#  ---------------
+#
+#  ./install [-reinstall] [-detectonly] [-user XXX[:YYY]]
+#
+#
+#  Silent Install:
+#  ---------------
+#
+#  ./install -silent [-reinstall] [-detectonly] [-user XXX[:YYY]] -d <install directory> -p <PLUS address> -sno <serial number> [-proxy <proxy server address> -port <proxy port> [-proxyuser <user> -proxypassword <password>] -an <agent nice>]
+#
+#  Installation Modifiers
+#  ----------------------
+#  -reinstall            : To install a new agent over and existing agent. The new agent will
+#                          reuse the agent id of the earlier instance.
+#  -detectonly           : To prevent the agent from communicating with the PatchLink Update
+#                          Server.
+#  -user XXX[:YYY]       : To make the XXX user and YYY group own the agent process and directory.
+#
+#  Where:
+#  <install directory>    = Directory where you wish to install the PatchLink
+#                           Update Agent
+#
+#  <PLUS address>         = The URL of the PatchLink Update Server with which
+#                           this agent will communicate.
+#
+#  <serial number>        = The serial number provided by PatchLink Corporation.
+#
+#  <proxy server address> = If your site uses proxies, then you should use this
+#                           optional parameter
+#
+#  <proxy port>           = If your site uses proxies, then enter the proxy
+#                           server's port through which the agent will communicate.
+#
+#  <agent nice>           = For setting the agent java process nice value.
+#
+#  Example:
+#
+# ./install -silent -d /usr/local -p http://192.168.3.57 -sno XXXXXXXX-XXXXXXXX
+#
+#
+#  Clean up registration files
+#  ---------------------------
+#
+#  ./install -cleanup
+#
+#  Use this option if you terminated the agent installation before it completed
+#  successfully. This option clean all system files that the agent creates as a
+#  part of installation.
+#
+#
+################################################################################
+
+
+
+##############################
+##############################
+#
+# GLOBAL SHELL VARIABLES
+#
+##############################
+##############################
+
+LANG=C
+export LANG
+
+AGENT_VERSION="7.0306"
+os=`uname` # The system's operating system.
+osRelease=`uname -r` # Release Kernel 
+
+olddir=`pwd` # The current directory.
+
+userid=`id | sed s/uid=0.*/uid=0/g | sed s/uid=//g`
+
+plusurl="" # This agent's PLUS
+
+serialno="" # This agent's PLUS's serial number.
+
+installdir="" # Location where the agent should be installed.
+
+groupsList="" # the groups to which this agent should be added on installation.
+
+proxy="" # Does this agent use a proxy.
+
+port="" # The proxy port if this agent uses a proxy.
+
+proxyuser="" # The username for proxy authentication.
+
+proxypassword="" # The password for proxy authentication.
+
+agentNice="" #The agent nice value the the user wants to use.
+
+agentNiceReinstall="" #If this is a reinstall, grab the value from the existing update.conf.
+
+reinstall="n" # Whether the agent id of the previous install be reused.
+
+detectonly="n" # Whether it is a detectOnly type of installation.
+
+isanotheruser="n" # Is the agent being run as a different user
+
+asuser="" # The user who should own the agent.
+
+asgroup="" # The group who should own the agent.
+
+colon="" # Will be set to : if ':' is provided with the -user argument.
+
+installtype="manual" # The type of installation, the default being manual.
+
+agentExists="n" # Does an instance of the agent already exist?
+
+samefilesystem=250000 # Space requirements in KBytes.
+
+patchlinkfilesystem=150000 # Space requirements in KBytes.
+
+tmpfilesystem=100000 # Space requirements in KBytes.
+
+installSize="" # Install Space requirements in KBytes.
+
+patchlinkdir="" # variable used during installation.
+
+plbindir="" # variable used during installation.
+
+logfile="" # variable used during installation.
+
+fullname="PatchLink Update Agent"
+
+brandingName="patchagent" # variable to hold either patchlink or patchagent
+
+jreInstallFile="" # variable to hold the name of the java jre install file
+
+jreHomePath="" # variable to hold the path of the jre after installation
+
+GREP=/usr/bin/grep
+SED=/usr/bin/sed
+HEAD=/usr/bin/head
+TAIL=/usr/bin/tail
+EXPR=/bin/expr
+ECHO=/bin/echo
+
+vendor=PatchLink
+machine_arch=x86
+manufacturer=""
+vendorLong=""
+copyright=""
+vendor_email=""
+vendor_phone=""
+product=""
+server=""
+
+java_arch=x86
+
+##############################
+##############################
+#
+# FUNCTIONS
+#
+##############################
+##############################
+getProperties()
+{
+	getVendor
+	getVendorLong
+	getManufacturer
+	getCopyright
+	getVendor_email
+	getVendor_phone
+	getProduct
+	getServer
+}
+
+
+##
+# Function: welcomeMessage
+# Display the welcome message
+##
+welcomeMessage()
+{
+    echo
+    echo "Installing $product $AGENT_VERSION"
+    echo "$copyright"
+    echo
+}
+
+##
+# Function: getMachineArchitecture
+# get the architecture from uname
+##
+getMachineArchitecture()
+{
+   if [ "$os" = "Linux" -o "$os" = "Darwin" ]
+   then
+      command="uname -m"
+   elif [ "$os" = "AIX" ]
+   then
+      command="getconf -a | grep KERNEL_BITMODE"
+   elif [ "$os" = "SunOS" ]
+   then
+      command="isainfo -kv"
+   elif [ "$os" = "HP-UX" ]
+   then
+      command="getconf KERNEL_BITS"
+   fi
+
+   arch=` sh -c "$command 2>/dev/null" | grep 64 | sed 's/.*64.*/x64/g' `
+   if  [ "x$arch" != "x" ]
+   then
+      machine_arch=$arch
+   fi
+#   echo "Machine architecture is " $machine_arch
+}
+
+
+##
+# Function: getJavaArchitecture
+# get the architecture from java
+##
+getJavaArchitecture()
+{
+   if [ "$os" = "Linux" ]
+   then
+	  arch=`java -version 2>&1 | grep 64 | set 's/(build.*)//g' | sed 's/.*64.*/x64/g' `
+      if  [ "x$arch" != "x" ]
+      then
+         java_arch=$arch
+      fi
+   fi
+ #   echo "Java architecture is " $java_arch
+ }
+
+##
+# Function: getVendor
+# Find the vendor from the properties file
+##
+getVendor()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep vendor= | sed 's/vendor=//g' `
+	if [ "$tmp" != "" ]
+	then
+		vendor=$tmp;
+	fi
+fi
+}
+getManufacturer()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep manufacturer= | sed 's/manufacturer=//g' `
+	if [ "$tmp" != "" ]
+	then
+		manufacturer=$tmp;
+	fi
+fi
+}
+getProduct()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep product= | sed 's/product=//g' `
+	if [ "$tmp" != "" ]
+	then
+		product=$tmp;
+	fi
+fi
+}
+getVendorLong()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep vendorLong= | sed 's/vendorLong=//g' `
+	if [ "$tmp" != "" ]
+	then
+		vendorLong=$tmp;
+	fi
+fi
+}
+getCopyright()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep copyright= | sed 's/copyright=//g' `
+	if [ "$tmp" != "" ]
+	then
+		copyright=$tmp;
+	fi
+fi
+}
+getVendor_email()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep vendor_email= | sed 's/vendor_email=//g' `
+	if [ "$tmp" != "" ]
+	then
+		vendor_email=$tmp;
+	fi
+fi
+}
+getVendor_phone()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep vendor_phone= | sed 's/vendor_phone=//g' `
+	if [ "$tmp" != "" ]
+	then
+		vendor_phone=$tmp;
+	fi
+fi
+}
+getServer()
+{
+if [ -f ./patchagent.properties ]
+then
+	tmp=`cat ./patchagent.properties | grep server= | sed 's/server=//g' `
+	if [ "$tmp" != "" ]
+	then
+		server=$tmp;
+	fi
+fi
+}
+##
+# Function: verifyRoot
+# Ensure that a superuser is running this script.
+##
+verifyRoot()
+{
+  ROOT_UID=0
+  userid=`id | sed s/uid=0.*/uid=0/g | sed s/uid=//g`
+
+  if [ "$userid" != "$ROOT_UID" ]
+  then
+      echo "You are required to be the root to run this script."
+      exit
+  fi
+
+}
+
+# Function: createDeploymentStatusFile
+# Create the deploymentStatusFile and give it the correct
+# permissions based on who will run the agent.
+##
+createDeploymentStatusFile()
+{
+
+	if [ "x$installdir" = "x" ]
+	then
+		echo "Install Directory is not set. Please retry the installation."
+		exit 1
+	fi
+	DEPLOYMENTSTATUSFILE="/etc/instructplagent.status"
+  touch $DEPLOYMENTSTATUSFILE
+  if [ "$asuser" = "root" -o "x$asuser" = "x" ]
+  then
+    :
+  else
+    if [ "$colon" = ":" ]
+    then
+      chown -R $asuser:$asgroup $DEPLOYMENTSTATUSFILE
+    else
+      chown -R $asuser $DEPLOYMENTSTATUSFILE
+    fi
+  fi
+}
+
+##
+# Function: setDefaultDirToCheckServiceFile
+# Set the default locations for looking service file.
+##
+setDefaultDirToCheckServiceFile(){
+        case $os in
+            SunOS)
+                defaultCheckdir=/export/home
+                ;;
+            Linux)
+                defaultCheckdir=/usr/local
+                ;;
+            Darwin)
+                defaultCheckdir=/private/var
+                ;;
+            AIX)
+                defaultCheckdir=/usr/local
+                ;;
+            HP-UX)
+                defaultCheckdir=/usr/local
+                ;;
+            *)
+                defaultCheckdir=/
+                ;;
+        esac
+}
+
+
+##
+# Function: getAgentServiceFile
+# Search known locations for the patchlink service file
+##
+getAgentServiceFile() {
+    if [ "x$installdir" = "x" ]
+    then
+    	setDefaultDirToCheckServiceFile
+    fi
+
+    ##      -d argument     ##
+    if [ -f "$defaultCheckdir/patchlink/patchlinkservice" ]
+    then
+        servicefile="$defaultCheckdir/patchlink/patchlinkservice"
+    ##      "/etc/init.d"       ##
+    elif [ -f "/etc/init.d/patchlink" ]
+    then
+        servicefile="/etc/init.d/patchlink";
+
+    elif [ -f "/etc/init.d/patchlinkagent" ]
+    then
+        servicefile="/etc/init.d/patchlinkagent"
+
+
+
+    ##      "/sbin/init.d"      ##
+    elif [ -f "/sbin/init.d/patchlink" ]
+    then
+        servicefile="/etc/init.d/patchlink"
+    elif [ -f "/sbin/init.d/patchlinkagent" ]
+    then
+        servicefile="/sbin/init.d/patchlinkagent"
+
+    elif [ -f "/etc/rc.d/rc2.d/S99PatchLinkAgent" ]
+    then
+        servicefile="/etc/rc.d/rc2.d/S99PatchLinkAgent"
+
+    ##      "/System/Library/StartupItems"      ##
+    elif [ -f "/System/Library/StartupItems/patchlink/patchlink" ]
+    then
+        servicefile="/System/Library/StartupItems/patchlink/patchlink"
+    elif [ -f "/Library/StartupItems/patchlink/patchlink" ]
+    then
+        servicefile="/Library/StartupItems/patchlink/patchlink"
+    elif [ -f "/System/Library/StartupItems/patchlinkagent" ]
+    then
+        servicefile="/System/Library/StartupItems/patchlinkagent"
+    fi
+
+    if [ -f "$defaultCheckdir/patchagent/patchservice" ]
+    then
+        servicefile="$defaultCheckdir/patchagent/patchservice"
+    ##      "/etc/init.d"       ##
+    elif [ -f "/etc/init.d/patchagent" ]
+    then
+        servicefile="/etc/init.d/patchagent";
+
+    elif [ -f "/etc/init.d/patchagent" ]
+    then
+        servicefile="/etc/init.d/patchagent"
+    elif [ -f "$defaultCheckdir/patchagent/patchservice" ]
+    then
+        servicefile="$defaultCheckdir/patchagent/patchservice"
+    ##      "/sbin/init.d"      ##
+    elif [ -f "/sbin/init.d/patchagent" ]
+    then
+        servicefile="/sbin/init.d/patchagent"
+    elif [ -f "/etc/rc.d/rc2.d/S99PatchAgent" ]
+    then
+        servicefile="/etc/rc.d/rc2.d/S99PatchAgent"
+    elif [ -f "/etc/rc.d/rc2.d/S99patchagent" ]
+    then
+        servicefile="/etc/rc.d/rc2.d/S99patchagent"
+
+    ##      "/System/Library/StartupItems"      ##
+    elif [ -f "/System/Library/StartupItems/patchagent/patchagent" ]
+    then
+        servicefile="/System/Library/StartupItems/patchagent/patchagent"
+    elif [ -f "/Library/StartupItems/patchagent/patchagent" ]
+    then
+        servicefile="/Library/StartupItems/patchagent/patchagent"
+    elif [ -f "/System/Library/StartupItems/patchagent" ]
+    then
+        servicefile="/System/Library/StartupItems/patchagent"
+    fi
+
+}
+
+isAgentAlreadyInstalled()
+{
+
+    getAgentServiceFile;
+    #local Command;
+
+    if [ "$os" = "SunOS" -o "$os" = "AIX" ]
+    then
+        Command="nawk"
+    else
+        Command="awk"
+    fi
+
+    if [ "$servicefile" != "" ]
+    then
+        agentExists='y' # Found a previous instance of the agent.
+    	earlier=`cat $servicefile |grep '^PATCHLINK[_]*INSTALL[_]*DIR=' |sed 's/\(PATCHLINK[_]*INSTALL[_]*DIR\)=//g' | sed 's/"//g'`
+    	installdir="$earlier"
+    	brandingName=`cat $servicefile |grep 'PLPATH=' | sed 's/^PLPATH="$PATCHLINK_INSTALL_DIR\///g' | sed 's/"//g'`
+		echo "$servicefile" | grep -i "patchagent" >/dev/null 2>/dev/null
+		if [ $? = "0" ]
+	 	then
+     		if [ -d "$earlier/patchagent" ]
+	        then
+    	        agentExists='y' # Found a previous instance of the agent.
+	            return 0;
+    	    else
+	        	agentExists='n' # Found a previous instance of the agent.
+    	        return 1;
+	        fi
+    	else
+            if [ -d "$earlier/patchlink" ]
+            then
+        		agentExists='y' # Found a previous instance of the agent.
+                return 0;
+            else
+        		agentExists='n' # Found a previous instance of the agent.
+                return 1;
+            fi
+        fi
+	else
+        agentExists='n' # Found a previous instance of the agent.
+        return 1;
+    fi
+}
+
+
+
+##
+# Function: exitIfRequiredOnExisitngInstall
+# Decide whether to quit on an existing agent install.
+##
+exitAsAgentAlreadyExists()
+{
+	echo "$servicefile" | grep -i "patchagent" >/dev/null 2>/dev/null
+    if [ $? = "0" ]
+	then
+		brPath=patchagent
+		brService=patchservice
+		brInstall=install
+		brUninstall=uninstall
+	else
+		brPath=patchlink
+		brService=patchlinkservice
+		brInstall=installPatchLink
+		brUninstall=uninstallPatchLink
+	fi
+
+    echo ERROR: You have already installed $product in $earlier
+    echo "       To see the status of the installed $product: "
+    echo "          - Go to $earlier/$brPath directory"
+    echo "          - Invoke the command: ./$brService status"
+    echo "       To restart the installed $product: "
+    echo "          - Go to $earlier/$brPath directory"
+    echo "          - Invoke the command: ./$brService restart"
+    echo "       To uninstall the installed $product : "
+    echo "          - Go to $earlier/$brPath directory"
+    echo "          - Invoke the command: ./$brUninstall"
+    echo "       To remove $vendor related system files from this system : "
+    echo "          - Go to the directory containing the agent install files"
+    echo "          - Invoke the command: ./$brInstall -cleanup"
+    echo
+    exit 1;
+}
+
+
+##
+# Function: exportPath
+# Ensure that cetain directories are available.
+##
+exportPath()
+{
+	if [ "$os" = "Linux" ]; then
+	  PATH=$PATH:/usr/local/bin:/bin:/usr/bin:
+	  export PATH
+	elif [ "$os" = "SunOS" ]; then
+	  PATH=$PATH:/usr/sbin:/usr/bin
+	  export PATH
+	elif [ "$os" = "AIX" ]; then
+	  PATH=$PATH:/usr/bin:/etc:/usr/sbin:/usr/ucb:/sbin
+	  export PATH
+	elif [ "$os" = "Darwin" ]; then
+	  PATH=$PATH:/bin:/sbin:/usr/bin:/usr/sbin
+	  export PATH
+	elif [ "$os" = "HP-UX" ]; then
+	  PATH=$PATH:/usr/sbin:/usr/bin:/usr/ccs/bin:/usr/contrib/bin:/opt/nettladm/bin:/opt/fc/bin:/opt/fcms/bin:/opt/upgrade/bin:/opt/pd/bin:/opt/hparray/bin:/sbin:/home/root
+	  export PATH
+	fi
+}
+
+
+##
+# Function: createAIXTempLocation
+# Create directory where AIX temp patch files shall be placed.
+##
+createAIXTempLocation()
+{
+	if [ "$os" = "AIX" ]; then
+	  if [ ! -d /usr/sys/inst.images/AIXPatchLink ]; then
+	    mkdir /usr/sys/inst.images/AIXPatchLink
+	  fi
+	  if [ ! -d /usr/sys/inst.images/AIXPatchLink ]; then
+	    echo "/usr/sys/inst.images/AIXPatchLink directory could not be created."
+	  fi
+	fi
+}
+
+
+##
+# Function: isReachable
+# Verify whether a given set of commands are reachable
+##
+isReachable()
+{
+    commandlist="$@" ;
+    status="noproblem"
+    badresult=""
+	for command in $commandlist
+    do
+            location=`which $command 2>/dev/null`
+            badresult=`echo $location | grep "no $command in"`
+			if [ "x$location" = "x" -o "$badresult" != "" ]; then
+                    echo
+                    echo "*** System command \"$command\" could not be found ! ***"
+                    echo
+                    status="error"
+            fi
+    done
+    if [ "$status" = "error" ]; then
+            return 1;
+    else
+            return 0;
+    fi
+
+}
+
+
+##
+# Function: checkAndMakeJavaAvailable
+# Ensure that Java is present on the system and make it
+# available.
+##
+checkAndMakeJavaAvailable()
+{
+
+    newOS="$os"
+    if [ "$os" = "SunOS" ]
+    then
+	jreHomePath="patchagent/update/jre1.6.0_05"
+	procType=`uname -p`
+        if [ "$procType" = "sparc" ]
+        then
+	    jreInstallFile="patchagent/update/jre-6u5-solaris-sparc.sh"
+            newOS="${os}Sparc"
+        else
+	    jreInstallFile="patchagent/update/jre-6u5-solaris-i586.sh"
+            newOS="${os}x86"
+        fi
+    else
+	if [ "$os" = "Linux" ]
+	then
+	    jreInstallFile="patchagent/update/jre-6u5-linux-i586.bin"
+	    jreHomePath="patchagent/update/jre1.6.0_05"
+	fi
+    fi
+
+    if [ -f "$installdir/$jreInstallFile" ]
+    then
+        echo "Using BUNDLED JRE Installer. Expanding Files Now"
+        oldDir=`pwd`
+        if [ -d "$installdir/patchagent/update/jre" ]
+        then
+            rm -fr "$installdir/patchagent/update/jre"
+        fi
+        if [ -d "$installdir/$jreHomePath" ]
+        then
+            rm -fr "$installdir/$jreHomePath"
+        fi
+        cd "$installdir/patchagent/update/"
+	sh -c "\"$installdir\"/$jreInstallFile"
+	rm -fr "\"$installdir\"/$jreInstallFile"
+        cd "$oldDir"
+    fi
+
+
+    if [ -f "$installdir/$jreHomePath/bin/java" ]
+    then
+        PATCHAGENT_JRE="$installdir/$jreHomePath"
+        export PATCHAGENT_JRE
+        CLASSPATH=$PATCHAGENT_JRE/lib:$CLASSPATH
+        export CLASSPATH
+        JAVA_HOME="$PATCHAGENT_JRE"
+        export JAVA_HOME
+        PATH="$PATCHAGENT_JRE/bin:$PATH"
+        export PATH
+	echo "Bundled Java Version: "
+	echo `java -version`
+    fi
+    # We need to do a different java check for Mac 10.7 since java-version
+	#could invoke a install of java interactively which isn't good for a command line install
+	if [ "$os" = "Darwin" ]
+	then
+	    osver=`/usr/bin/sw_vers | /usr/bin/grep ProductVersion | /usr/bin/sed s/'ProductVersion:[[:space:]]*'//g`
+        isGreaterThanEqualTo $osver "10.7"
+        if [ $? = 1 ]
+        then
+        	javacheck=`/usr/libexec/java_home -V > /dev/null 2>&1`
+        	if [ $? != 0 ]
+        	then
+        		echo
+				echo "Error:"
+				echo "You must install Java "
+				echo "in order to run $product."
+				echo "Please run the command:"
+				echo '"/usr/libexec/java_home -R" from Terminal '
+				echo "to install java and then retry the installation."
+				exit 1
+        	fi
+        fi
+	fi
+	if java -version > /dev/null 2>&1
+	then
+		# Get Java version.  Determine whether its vendor is supported.
+		if [ "$os" = "SunOS" -o "$os" = "AIX" ]
+		then
+			JAVA_VERSION=` java -version 2>&1 | sed s/Solaris_JDK_//g 2>&1 | nawk '/java version/{
+								  print substr($3, 2, length($3)-2) }'`
+			JAVA_VER_NUM=`echo $JAVA_VERSION | nawk '{
+										   sub("1\.", "1")
+										   print substr($0, 0, 2) }' 2>/dev/null`
+			if [ "$os" = "AIX" ]; then
+				JAVA_VENDOR_SUPPORTED="true"
+			else
+				JAVA_VENDOR_SUPPORTED=` java -version 2>&1 | nawk '
+														   /HotSpot/ || /Solaris VM/{ print "true" }'`
+			fi
+		else
+			if [ "$os" = "Linux" -o "$os" = "HP-UX" -o "$os" = "Darwin" ]
+			then
+				java -version 2>&1 |grep -v "HotSpot not at" >/tmp/jvmv
+				JAVA_VERSION=` cat /tmp/jvmv | awk '/java version/{
+								  print substr($3, 2, length($3)-2) }'`
+
+				if [ "$os" = "Linux" ]
+				then
+					JAVA_VER_NUM=`echo $JAVA_VERSION | cut -c 1-3 | awk -F. '{print $1$2}'`
+				else
+					JAVA_VER_NUM=`echo $JAVA_VERSION | awk '{
+										sub("1\.", "1")
+										print substr($0, 0, 2) }' 2>/dev/null`
+				fi
+
+				if [ "$os" = "HP-UX" ]; then
+					JAVA_VENDOR_SUPPORTED="true"
+				else
+					JAVA_VENDOR_SUPPORTED=` cat /tmp/jvmv | awk '
+														   /OpenJDK Runtime/ || /HotSpot/ || /Solaris VM/ || /IcedTea/{ print "true" }'`
+				fi
+				JAVA_PROVIDER=` java -version 2>&1  | awk '/Free Software Foundation/{
+								  print substr($4, 1, length($4)) }'`
+				if [ "$JAVA_PROVIDER" = "Free" ]
+				then
+					echo
+					echo "Error:"
+					echo "$product has been designed for the Java Runtime Environment"
+					echo "provided by Sun Microsystems. It can be downloaded at no charge from"
+					echo "http://java.sun.com/j2se/1.4/index.html"
+					echo
+					echo "Your machine is currently using GNU Java Runtime Environment."
+					echo "Please modify the system environment to use Sun JRE."
+					echo
+					echo "If you have already downloaded the Sun Java make sure that it appears"
+					echo "*before* GNU Java in the PATH environment variable."
+					echo
+					echo
+					exit 1
+				fi
+			fi
+		fi
+
+		if [ $JAVA_VER_NUM -lt 14 ]
+		then
+			echo
+			echo "Error:"
+			echo "You are running Java version $JAVA_VERSION."
+			echo "You must install Java verion 1.4 or greater to run $product."
+			echo
+			exit 1
+		fi
+
+
+		if [ "$JAVA_VENDOR_SUPPORTED" != "true" ]; then
+
+			# First java found is from an unsupported vendor.
+
+			JAVA_DIR_1=`which java | awk '{ print substr($0, 1, length($0) - 5) }'`
+			export JAVA_DIR_1
+
+			#echo "First java directory is $JAVA_DIR_1"
+
+			# Find another java.
+			echo "Java `which java` found, but its vendor is not supported."
+			echo "Searching file system for another java..."
+
+			if [ "$os" = "SunOS" -o "$os" = "AIX" ]
+			then
+				JAVA_DIR=`nawk 'BEGIN {
+				  while ( (  "find / -fstype nfs -prune -o -name java -print 2>/dev/null"  | getline ) > 0)  {
+						  java_dir_1=ENVIRON["JAVA_DIR_1"]
+						  tmp = substr($0, length($0) - 8)
+						  if ( tmp == "/bin/java" ) {
+							 java_dir = substr($0, 1, length($0) -5)
+							 if ( java_dir != java_dir_1 ) {
+								print java_dir
+								exit
+							 }
+						  }
+				  }
+				  close("find / -fstype nfs -prune -o -name java -print 2>/dev/null")
+			   }' java_dir_1="$JAVA_DIR_1"`
+			else
+				if [ "$os" = "Linux" -o "$os" = "HP-UX" ]
+				then
+					JAVA_DIR=`awk 'BEGIN {
+						while ( (  "find / -fstype nfs -prune -o -name java -print 2>/dev/null"  | getline ) > 0)  {
+						  java_dir_1=ENVIRON["JAVA_DIR_1"]
+						  tmp = substr($0, length($0) - 8)
+						  if ( tmp == "/bin/java" ) {
+							 java_dir = substr($0, 1, length($0) -5)
+							 if ( java_dir != java_dir_1 ) {
+								print java_dir
+								exit
+							 }
+						  }
+				  }
+				  close("find / -fstype nfs -prune -o -name java -print 2>/dev/null")
+			   }'`
+				fi
+			fi
+
+
+			if [ "$JAVA_DIR" = "" ]
+			then
+				# Another Java not found
+				echo
+				echo "Error:"
+				echo "You must install Sun Microsystem's Java v 1.4 or later"
+				echo "in order to run $product."
+				echo
+				exit 1
+			else
+				echo "Another java found in $JAVA_DIR"
+
+				PATH="$JAVA_DIR:$PATH"
+				export PATH
+
+				# Get Java version.  Determine whether its vendor is supported.
+				if [ "$os" = "SunOS" -o "$os" = "AIX" ]
+				then
+					JAVA_VERSION=` java -version 2>&1  | nawk '/java version/{
+										print substr($3, 2, length($3)-2) }'`
+					JAVA_VER_NUM=`echo $JAVA_VERSION | nawk '{
+												 sub("1\.", "1")
+												 print substr($0, 0, 2) }' 2>/dev/null`
+					if [ "$os" = "AIX" ]; then
+						JAVA_VENDOR_SUPPORTED="true"
+					else
+						JAVA_VENDOR_SUPPORTED=` java -version 2>&1 | nawk '
+																 /HotSpot/ || /Solaris VM/{ print "true" }'`
+					fi
+				else
+					if [ "$os" = "Linux" -o "$os" = "HP-UX" -o "$os" = "Darwin" ]
+					then
+						JAVA_VERSION=` java -version 2>&1  | awk '/java version/{
+										print substr($3, 2, length($3)-2) }'`
+						JAVA_VER_NUM=`echo $JAVA_VERSION | awk '{
+												 sub("1\.", "1")
+												 print substr($0, 0, 2) }' 2>/dev/null`
+						if [ "$os" = "HP-UX" ]; then
+							JAVA_VENDOR_SUPPORTED="true"
+						else
+							JAVA_VENDOR_SUPPORTED=` java -version 2>&1 | awk '
+																 /HotSpot/ || /Solaris VM/ || /IcedTea/{ print "true" }'`
+						fi
+
+						JAVA_PROVIDER=` java -version 2>&1  | awk '/Free Software Foundation/{
+										print substr($4, 1, length($4)) }'`
+					fi
+				fi
+
+				if [ $JAVA_VER_NUM -lt 14 ]
+				then
+					echo
+					echo "Error:"
+					echo "You are running Java version $JAVA_VERSION."
+					echo "You must install Java verion 1.4 or greater to run $product."
+					echo
+					exit 1
+				fi
+
+				if [ "$JAVA_VENDOR_SUPPORTED" != "true" ]
+				then
+					if [ "$JAVA_PROVIDER" = "Free" ]
+					then
+						echo
+						echo "Error:"
+						echo "$product has been designed for the Java Runtime Environment"
+						echo "provided by Sun Microsystems. It can be downloaded at no charge from"
+						echo "http://java.sun.com/j2se/1.4/index.html"
+						echo
+						echo "Your machine is currently using GNU Java Runtime Environment."
+						echo "Please modify the system environment to use Sun JRE."
+						echo
+						echo "If you have already downloaded the Sun Java make sure that it appears"
+						echo "*before* GNU Java in the PATH environment variable."
+						echo
+						echo
+					else
+						echo
+						echo "Your other Java's vendor is also not supported."
+						echo "Please install JRE 1.4 or higher from Sun Microsystems"
+						echo
+					fi
+					exit 1
+				fi
+			fi
+		fi
+	else
+		# Find java
+		echo "Searching file system for java..."
+		if [ "$os" = "SunOS" -o "$os" = "AIX" ]
+		then
+			JAVA_DIR=`nawk 'BEGIN {
+			   while ( (  "find / -fstype nfs -prune -o -name java -print 2>/dev/null"  | getline ) > 0)  {
+					   tmp = substr($0, length($0) - 8)
+					   if (tmp == "/bin/java") {
+						  java_dir = substr($0, 1, length($0) - 5)
+						  print java_dir
+						  exit
+					   }
+			   }
+			   close("find / -fstype nfs -prune -o -name java -print 2>/dev/null")
+			}'`
+		else
+			if [ "$os" = "Linux" -o "$os" = "HP-UX" ]
+			then
+				JAVA_DIR=`awk 'BEGIN {
+					while ( (  "find / -fstype nfs -prune -o -name java -print 2>/dev/null"  | getline ) > 0)  {
+					   tmp = substr($0, length($0) - 8)
+					   if (tmp == "/bin/java") {
+						  java_dir = substr($0, 1, length($0) - 5)
+						  print java_dir
+						  exit
+					   }
+			   }
+			   close("find / -fstype nfs -prune -o -name java -print 2>/dev/null")
+			}'`
+			fi
+		fi
+
+		if [ "$JAVA_DIR" = "" ]
+		then
+			# Java not found
+			echo
+			echo "Error:"
+			echo "You must install Java v 1.4 or later"
+			echo "in order to run $product."
+			echo
+			exit 1
+		else
+			echo "Java found in $JAVA_DIR"
+
+			PATH="$PATH:$JAVA_DIR"
+			export PATH
+
+			# Get Java version
+			if [ "$os" = "SunOS" -o "$os" = "AIX" ]
+			then
+				JAVA_VERSION=` java -version 2>&1  | nawk '/java version/{
+									 print substr($3, 2, length($3)-2) }'`
+				JAVA_VER_NUM=`echo $JAVA_VERSION | nawk '{
+											  sub("1\.", "1")
+											  print substr($0, 0, 2) }' 2>/dev/null`
+				if [ "$os" = "AIX" ]; then
+					JAVA_VENDOR_SUPPORTED="true"
+				else
+					JAVA_VENDOR_SUPPORTED=` java -version 2>&1 | nawk '/HotSpot/{ print "true" }'`
+				fi
+			else
+				if [ "$os" = "Linux" -o "$os" = "HP-UX" ]
+				then
+					JAVA_VERSION=` java -version 2>&1  | awk '/java version/{
+									 print substr($3, 2, length($3)-2) }'`
+					JAVA_VER_NUM=`echo $JAVA_VERSION | awk '{
+											  sub("1\.", "1")
+											  print substr($0, 0, 2) }' 2>/dev/null`
+					if [ "$os" = "HP-UX" ]; then
+						JAVA_VENDOR_SUPPORTED="true"
+					else
+						JAVA_VENDOR_SUPPORTED=` java -version 2>&1 | awk '/HotSpot/ || /IcedTea/{ print "true" }'`
+					fi
+					JAVA_PROVIDER=` java -version 2>&1  | awk '/Free Software Foundation/{
+									  print substr($4, 1, length($4)) }'`
+				fi
+			fi
+
+			if [ $JAVA_VER_NUM -lt 14 ]
+			then
+				echo
+				echo "Error:"
+				echo "You are running Java version $JAVA_VERSION."
+				echo "You must install Java verion 1.4 or greater to run the $product."
+				echo
+				exit 1
+			fi
+
+			if [ "$JAVA_VENDOR_SUPPORTED" != "true" ]
+			then
+				if [ "$JAVA_PROVIDER" = "Free" ]
+				then
+					echo
+					echo "Error:"
+					echo "$product has been designed for the Java Runtime Environment"
+					echo "provided by Sun Microsystems. It can be downloaded at no charge from"
+					echo "http://java.sun.com/j2se/1.4/index.html"
+					echo
+					echo "Your machine is currently using GNU Java Runtime Environment."
+					echo "Please modify the system environment to use Sun JRE."
+					echo
+					echo "If you have already downloaded the Sun Java make sure that it appears"
+					echo "*before* GNU Java in the PATH environment variable."
+					echo
+					echo
+				else
+					echo
+					echo "Error:"
+					echo "Your Java Runtime Environment is not from Sun Microsystems."
+					echo "Please install JRE 1.4 or higher from Sun Microsystems"
+					echo
+				fi
+				exit 1
+			fi
+		fi
+	fi
+}
+
+
+
+
+##
+# Function: verifyCommandAvailability
+# Ensure that command commands are available.
+##
+verifyCommandAvailability()
+{
+    if [ "$os" = "Linux" ]; then
+        if [ -f /etc/lsb-release ] && [ `grep -i Ubuntu /etc/lsb-release 2>/dev/null | wc -c` -ge 1 ]; then
+            isReachable "ps dpkg find ls uname cat rm chmod date bc\
+                         hostname dmesg df sed awk head wc expr /usr/sbin/update-rc.d"
+        else
+            isReachable "ps rpm find ls uname cat rm chmod ln date bc\
+                         hostname dmesg df sed awk head wc expr /sbin/chkconfig"
+        fi
+    elif [ "$os" = "SunOS" ]; then
+		if [ "$osRelease" = "5.11"  ]; then
+			if [ ! -d "/usr/ucb" ]; then
+				print "Directory /usr/ucb not found. You need to install the compatibility/ucb pack."
+				print "Run the command: pkg install compatibility/ucb"
+				print "Installation cancelled."
+				exit 1
+			else
+				isReachable "/usr/ucb/ps pkginfo grep find ls\
+                     uname cat rm chmod ln bc hostname df sed awk head cpio cut\
+                     dc wc expr nawk uniq gzip"			
+			fi
+		else
+			isReachable "/usr/ucb/ps showrev patchadd pkginfo grep find ls\
+                     uname cat rm chmod ln bc hostname df sed awk head cpio cut\
+                     dc wc expr nawk uniq gzip jar"
+		fi
+    elif [ "$os" = "AIX" ]; then
+        isReachable "ps instfix lslpp find ls uname cat chmod ln date bc\
+                     hostname head wc expr gzip tar"
+    elif [ "$os" = "Darwin" ]; then
+        isReachable "tail"
+    elif [ "$os" = "HP-UX" ]; then
+        isReachable "ioscan swlist"
+    else
+        echo "Error: The $os operating system is not supported at this time."
+        exit 1
+    fi
+
+    result=$?
+
+    if [ "$result" = "1" ]; then
+        echo "Error: The above listed missing command(s) are necessary for the normal"
+        echo "       functioning of $product. Please make sure that these commands are"
+        echo "       in the environment path."
+        echo "       Exiting..."
+        echo
+        exit 1
+    fi
+}
+
+
+##
+# Function: setDefaultAgentInstallDirectories
+# Set the default locations for agent installation.
+##
+setDefaultAgentInstallDirectories()
+{
+    if [ "x$installdir" = "x" ]
+    then
+        case $os in
+            SunOS)
+                defaultdir=/export/home
+                ;;
+            Linux)
+                defaultdir=/usr/local
+                ;;
+            Darwin)
+                defaultdir=/private/var
+                ;;
+            AIX)
+                defaultdir=/usr/local
+                ;;
+            HP-UX)
+                defaultdir=/usr/local
+                ;;
+            *)
+                defaultdir=/
+                ;;
+        esac
+    fi
+	if [ -d "$installdir/patchlink" -a ! -d "$installdir/patchagent" ]
+	then
+		mkdir "$installdir/patchagent" >/dev/null 2>/dev/null
+		#cp "$installdir/patchlink/update.conf" "$installdir/patchagent/"
+		echo "" >> "$installdir/patchlink/update.conf"
+		echo "" >> "$installdir/patchlink/update.conf"
+		echo "" >> "$installdir/patchlink/update.conf"
+		cat "$installdir/patchlink/update.conf" |sed 's/\"n\"/\"\"/' > "$installdir/patchagent/update.conf"
+		cleanRegistrationTrace
+	fi
+}
+
+
+##
+# Function: verifySpaceAvailability
+# Verify availability of sufficient space to install the agent.
+##
+verifySpaceAvailability()
+{
+    if [ "$os" = "HP-UX" ]; then
+        AS1=`/usr/bin/df -k "$installdir" | awk '{ print $5 }' | head -1 `
+        IS=`/usr/bin/du -sk ./patchagent.tar | awk '{ print $1 }'`
+    elif [ "$os" = "AIX" ]; then
+        AS1=`df -k "$installdir" | awk '{ print $3 }' | sed '1d'`
+        IS=`du -sk ./patchagent.tar | awk '{ print $1 }'`
+    else
+        if [ "$os" = "SunOS" ]; then
+            AS1=`df -k "$installdir" | awk '{ print $4 }' | sed '1d'`
+	    IS=`du -sk ./patchagent.tar | awk '{ print $1 }'`
+        elif [ "$os" = "Darwin" ]; then
+            AS1=`df -k "$installdir" | awk '{ print $4 }' | sed '1d'`
+	    IS=`du -sk ./patchagent.tar | awk '{ print $1 }'`
+        else
+            AS1=`df -kP "$installdir" | awk '{ print $4 }' | sed '1d'`
+	    IS=`du -sk ./patchagent.tar | awk '{ print $1 }'`
+        fi
+    fi
+
+    if [ "$IS" -gt "5000" ]
+    then
+    	installSize=105000
+    else
+    	installSize=5000
+    fi
+
+
+    if [ "$os" = "HP-UX" ]; then
+        FS1=`/usr/bin/df -k "$installdir" | awk '{ print $2  }' | sed s/"("//g | head -1 `
+    else
+        if [ "$os" = "SunOS" ]; then
+            FS1=`df -k "$installdir" | awk '{ print $1 }' | sed '1d'`
+        elif [ "$os" = "Darwin" ]; then
+            FS1=`df -k "$installdir" | awk '{ print $1 }' | sed '1d'`
+        else
+            FS1=`df -kP "$installdir" | awk '{ print $1 }' | sed '1d'`
+        fi
+    fi
+
+    if [ $os = "SunOS" ]
+    then
+        TMP="/var/tmp"
+    else
+        TMP="/tmp"
+    fi
+
+    if [ "$os" = "HP-UX" ]; then
+        AS2=`/usr/bin/df -k $TMP | awk '{ print $5 }' | head -1 `
+    elif [ "$os" = "AIX" ]; then
+        AS2=`df -k $TMP | awk '{ print $3 }' | sed '1d'`
+    else
+        if [ "$os" = "SunOS" ]; then
+            AS2=`df -k $TMP | awk '{ print $4 }' | sed '1d'`
+        elif [ "$os" = "Darwin" ]; then
+            AS2=`df -k $TMP | awk '{ print $4 }' | sed '1d'`
+        else
+            AS2=`df -kP $TMP | awk '{ print $4 }' | sed '1d'`
+        fi
+    fi
+
+    if [ "$os" = "HP-UX" ]; then
+        FS2=`/usr/bin/df -k $TMP | awk '{ print $2  }' | sed s/"("//g | head -1 `
+    else
+        if [ "$os" = "SunOS" ]; then
+            FS2=`df -k $TMP | awk '{ print $1 }' | sed '1d'`
+        elif [ "$os" = "Darwin" ]; then
+            FS2=`df -k $TMP | awk '{ print $1 }' | sed '1d'`
+        else
+            FS2=`df -kP $TMP | awk '{ print $1 }' | sed '1d'`
+        fi
+    fi
+
+    if [ "$FS1" = "$FS2" ]
+    then
+        if [ $AS1 -lt $installSize ]
+        then
+            echo "There is insufficient space to install $product in $installdir ."
+            echo "Please try a directory in a filesystem other than $FS1 ."
+            exit 1
+        elif [ $AS1 -lt $samefilesystem ]
+        then
+            echo
+            echo "The $installdir directory is a part of the $FS1 filesystem."
+            echo "The $FS1 filesystem currently has $AS1 Kb available space. For $product to deploy"
+            echo "large patches, $vendor recommends that you have atleast $samefilesystem Kb unused space on $FS1."
+            echo "You can continue with $product installation and free up the space later."
+            echo
+        fi
+    else
+        if [ $AS1 -lt $installSize ]
+        then
+        echo
+        echo "There is insufficient space to install $product in $installdir."
+        echo "Please try a directory in a filessystem other than $FS1."
+        exit 1
+        elif [ $AS1 -lt $patchlinkfilesystem ]
+        then
+            echo
+            echo "The $installdir directory is a part of the $FS1 filesystem."
+            echo "The $FS1 filesystem currently has $AS1 Kb available space. For $product to deploy"
+            echo "large patches, $vendor recommends that you have atleast $patchlinkfilesystem Kb unused space on $FS1."
+            echo "You can continue with $product installation and free up the space later."
+            echo
+        fi
+
+        if [ $AS2 -lt $tmpfilesystem ]
+        then
+            echo
+            echo "The $TMP directory is a part of the $FS2 filesystem and is used by the $product."
+            echo "The $FS2 filesystem currently has $AS2 Kb available space. For $product to deploy"
+            echo "large patches, $vendor recommends that you have atleast $tmpfilesystem Kb unused space on $FS1."
+            echo "You can continue with the $product installation and free up the space later."
+            echo
+        fi
+    fi
+}
+
+
+##
+# Function: initializeInstallationVariables
+# Set values of variables required during installation of the agent.
+##
+initializeInstallationVariables()
+{
+    # For the manual and reinstall type of installation, the installdir
+    # is not yet known. So ask user for that. For the other install types
+    # the value should already be known.
+    if [ "$installtype" = "manual" -a "$installdir" = "" ]; then
+        FOUND=false
+        while [ "$FOUND" = false ]
+        do
+            echo
+            printf "Enter the directory where $product should be installed [$defaultdir]: "
+
+            read installdir
+            if [ "x$installdir" = "x" ]
+            then
+                installdir="$defaultdir"
+            else
+                # Remove trailing "/"
+                installdir=`echo "$installdir" | sed "s/\/$//"`
+
+            fi
+
+            if [ -d "$installdir" ]
+            then
+                FOUND=true
+            else
+                echo "* * * Error: $installdir does not exist ! * * *"
+            fi
+        done
+    fi
+
+    # Now that installdir is known for every install type set, set other
+    # variables based on it.
+    patchlinkdir="$installdir/patchagent"
+    plbindir="$patchlinkdir/update/bin"
+    logfile="$patchlinkdir/update/log/updateagent.log"
+    CLASSPATH=$CLASSPATH:"\"$patchlinkdir/update/bin\"":.:plsupport.jar:patch.jar:patchagentssl.jar:jcert.jar:jnet.jar:jsse.jar:jsafe.jar
+    export CLASSPATH
+    PATH=$PATH:"\"$plbindir\""
+    service="y" # we will always install the agent as a service.
+
+	# if we don't have an agentNice value yet, set a default
+	if [ "x$agentNice" = "x" ]
+	then
+		if [ "$os" = "AIX" -o "$os" = "SunOS" -o "$os" = "HP-UX" ]
+		then
+			agentNice="20"
+		else
+			agentNice="0"
+		fi
+	fi
+}
+
+
+##
+# Function: parseArguments
+# Parse the provided command line arguments.
+##
+parseArguments()
+{
+	while [ "$#" != 0 ]
+	do
+    	if [ "$1" = "-cleanup" -o "$1" = "-CLEANUP" ]
+        then
+ 	       if [ "$installtype" = "silent" ]
+    	   then
+        	   cleanRegistrationTrace
+               exit 0
+        else
+        	printf "Are you sure you want to delete all $vendor related system files for this system?[y/N]: "
+            read choice
+            if [ "x$choice" = "xy" -o "x$choice" = "xY"  ]
+            then
+            	cleanRegistrationTrace
+                exit 0
+            else
+                   exit 1
+            fi
+		fi
+
+#		if [ "$1" = "-cleanup" -o "$1" = "-CLEANUP" ]
+#        then
+#          printf "Are you sure you want to delete all $vendor related system files for this system?[y/N]: "
+#          read choice
+#          if [ "x$choice" = "xy" -o "x$choice" = "xY"  ]
+#          then
+#            cleanRegistrationTrace
+#            exit 1
+#          fi
+        elif [ "$1" = "-d" -o "$1" = "-D" ]
+        then
+            shift
+            installdir=`echo $1`
+			if [ "$installdir" = "" ]
+			then
+				echo "ERROR: Blank install directory detected.  Please enter a valid directory after the -d flag."
+				exit 1
+			fi
+            installdir=`echo "$installdir" | sed "s/\/$//"`
+        elif [ "$1" = "-g" -o "$1" = "-G" ]
+        then
+            shift
+            groupsList=`echo $1`
+			if [ "$groupsList" = "" ]
+			then
+				echo "ERROR: Blank group list was detected. Please enter a valid group list after the -g flag."
+				exit 1
+			fi
+        elif [ "$1" = "-sno" -o "$1" = "-SNO" ]
+        then
+            shift
+            serialno=`echo $1`
+			if [ "$serialno"  = "" ]
+			then
+				echo "ERROR: Blank serial number was detected. Please enter a valid serial number after the -sno flag."
+				exit 1
+			fi
+        elif [ "$1" = "-proxy" -o "$1" = "-PROXY" ]
+        then
+            shift
+            proxy=`echo $1 | sed s/"http.*:\/\/"//g`
+			if [ "$proxy" = "" ]
+			then
+				echo "ERROR: Blank proxy address was detected. Please enter a valid proxy address after the -proxy flag."
+				exit 1
+			fi
+        elif [ "$1" = "-port" -o "$1" = "-PORT" ]
+        then
+            shift
+            port=`echo $1`
+			if [ "$port" = "" ]
+			then
+				echo "ERROR: Blank port was detected. Please enter a valid proxy port after the -port flag."
+				exit 1
+			fi
+        elif [ "$1" = "-proxyuser" -o "$1" = "-PROXYUSER" ]
+        then
+            shift
+            proxyuser=`echo $1 | sed s/"http.*:\/\/"//g`
+			if [ "$proxyuser" = "" ]
+			then
+				echo "ERROR: Blank proxy user was detected. Please enter a valid proxy port after the -proxyuser flag."
+				exit 1
+			fi
+        elif [ "$1" = "-proxypassword" -o "$1" = "-PROXYPASSWORD" ]
+        then
+            shift
+            proxypassword=`echo $1`
+        elif [ "$1" = "-user" -o "$1" = "-USER" ]
+        then
+            shift
+            colon=`echo $1 | sed s/.*:.*/:/g`
+            asuser=`echo $1 | sed s/:.*//g`
+			if [ "$asuser" = "" ]
+			then
+				echo "ERROR: Blank user was detected. Please enter a valid user after the -user flag."
+				exit 1
+			fi
+            if [ "$colon" = ":" ]
+            then
+                asgroup=`echo $1 | sed s/.*://g`
+            else
+                asgroup=""
+            fi
+            fngrusr=`finger $asuser 2>&1 | head -1 | grep 'no such user'`
+            if [ ! "x$fngrusr" = "x" ]
+            then
+                echo "Error: $asuser does not exist."
+                exit 1
+            fi
+            isanotheruser="y"
+        elif [ "$1" = "-p" -o "$1" = "-P" ]
+        then
+            shift
+            plusurl=`echo $1`
+			if [ "$plusurl" = "" ]
+			then
+				echo "ERROR: Blank URL detected. Please enter a valid URL after the -p flag"
+				exit 1
+			fi
+        elif [ "$1" = "-reinstall" -o "$1" = "-REINSTALL"  -o "$1" = "REINSTALL"  -o "$1" = "reinstall" ]
+        then
+            reinstall="y"
+        elif [ "$1" = "-detectOnly" -o "$1" = "-DETECTONLY" -o "$1" = "-detectonly" ]
+        then
+            detectonly="y"
+        elif [ "$1" = "-silent" -o "$1" = "-SILENT" ]
+        then
+            installtype="silent"
+        elif [ "$1" = "-noquery" -o "$1" = "-NOQUERY" -o "$1" = "-reinstall" -o "$1" = "-REINSTALL"  ]
+        then
+            installtype="hotfix"
+        elif [ "$1" = "-an" -o "$1" = "-AN" ]
+		then
+			shift
+			agentNice=`echo $1`
+			if [ "$agentNice" = "" ]
+			then
+				echo "Invalid value detected for Agent Nice Value. Please enter a value after the -an flag"
+				exit 1
+			fi
+		else
+            echo "Error: Unexpected argument: $1"
+            exit 1
+        fi
+        shift
+    done
+}
+
+
+##
+# Function: printArguments
+# Print the parsed command line arguments.
+##
+printArguments()
+{
+    echo os=$os
+    echo olddir=$olddir
+    echo userid=$userid
+    echo plusurl=$plusurl
+    echo serialno=$serialno
+    echo installdir="$installdir"
+    echo proxy=$proxy
+    echo port=$port
+    echo reinstall=$reinstall
+    echo detectonly=$detectonly
+    echo asuser=$asuser
+    echo installtype=$installtype
+	echo agentnice=$agentNice
+}
+
+
+##
+# Function: expandArchive
+# Untar the agent tar into install directory.
+##
+expandArchive()
+{
+    # Be in the directory where the agent will be installed.
+    cd "$installdir"
+    echo "Expanding archive..."
+    if [ -f "$olddir/patchagent.tar" ]
+    then
+        tar -xf "$olddir/patchagent.tar"
+    else
+        echo "ERROR: Could not find patchagent.tar."
+        echo "       Exiting."
+        exit 1;
+    fi
+
+    # copy the properties file from here to the bin directory
+    if [ -f "$olddir/patchagent.properties" ]
+    then
+		cp "$olddir/patchagent.properties" "$installdir/patchagent/update/bin/patchagent.properties"
+    else
+        echo "ERROR: Could not find patchagent.properties file."
+        echo "       Exiting."
+        exit 1;
+    fi
+}
+
+
+##
+# Function: verifyComputerNameFormat
+# Ensure that the computer name is of the correct format.
+##
+verifyComputerNameFormat()
+{
+    if [ -f "$plbindir/machinename.txt" ]
+    then
+      rm -f "$plbindir/machinename.txt"
+    fi
+
+    if [ "$os" = "Darwin" ]
+    then
+      hname=`"$plbindir/maccomputername"`
+    else
+      hname=`/bin/hostname`
+    fi
+
+    while [ "$hname" = "LOCALHOST" -o "$hname" = "localhost" -o \
+            "$hname" = "localhost.localdomain" -o "$hname" = "LOCALHOST.LOCALDOMAIN" -o \
+            "$hname" = "" ]
+    do
+      echo
+      echo "The name of this computer is currently set to: $hname"
+      echo
+      if [ "$os" = "Darwin" ]
+      then
+        echo "Please set the name of this computer from System Preferences -> Sharing \
+              and then do the agent installation."
+        exit 1
+      else
+        printf "Please enter a name for this machine: "
+        read hname
+        /bin/hostname $hname
+      fi
+    done
+
+    echo $hname > "$plbindir/machinename.txt"
+
+}
+
+##
+# Function: pddmInitialization
+# Perform setup for Patchlink Desktop Deployment Manager (PDDM).
+##
+pddmInitialization()
+{
+    echo "#!/bin/sh" > "$plbindir/PATCHVOTE"
+    echo "PATH=$PATH" >> "$plbindir/PATCHVOTE"
+    echo "CLASSPATH=.:$CLASSPATH" >> "$plbindir/PATCHVOTE"
+    echo "export PATH CLASSPATH" >> "$plbindir/PATCHVOTE"
+    cat "$plbindir/.PATCHVOTE" >> "$plbindir/PATCHVOTE"
+    chmod 555 "$plbindir/PATCHVOTE"
+
+    if [ -h /usr/bin/INSTALLPATCH ]
+    then
+        rm -f /usr/bin/INSTALLPATCH
+    fi
+
+    ln -s "$plbindir/PATCHVOTE" /usr/bin/INSTALLPATCH
+
+    if [ -h /usr/bin/SNOOZE ]
+    then
+        rm -f /usr/bin/SNOOZE
+    fi
+
+    ln -s "$plbindir/PATCHVOTE" /usr/bin/SNOOZE
+
+    if [ -h /usr/bin/REBOOTNOW ]
+    then
+        rm -f /usr/bin/REBOOTNOW
+    fi
+
+    ln -s "$plbindir/PATCHVOTE" /usr/bin/REBOOTNOW
+
+    if [ -h /usr/bin/REJECT ]
+    then
+        rm -f /usr/bin/REJECT
+    fi
+
+    ln -s "$plbindir/PATCHVOTE" /usr/bin/REJECT
+
+}
+
+
+##
+# Function: handleRPMhangingProblem
+# Handle the problem encountered in RedHat 8 and 9.
+##
+handleRPMhangingProblem()
+{
+    if [ "$os" = "Linux" ]
+    then
+        isRH8=`grep 'Red Hat Linux release 8.0' /etc/redhat-release 2>/dev/null`
+        isRH9=`grep 'Red Hat Linux release 9' /etc/redhat-release 2>/dev/null`
+        if [ "x$isRH8" = "x" -a "x$isRH9" = "x" ] # neither of the two
+        then
+            rm -f "$patchlinkdir/update/bin/rpm"
+        else
+            PATH="$patchlinkdir/update/bin":$PATH:
+            export PATH
+        fi
+    fi
+}
+##
+# This checks for the availability of the SuSe-release file
+#if it is not present then we use the SPIdent command to define the OS
+verifyReleaseFileAvailable()
+{
+	if [ "$os" = "Linux" ]
+	then
+		if [ -f /etc/redhat-release ]
+		then
+			rhRelease="true"
+		elif [ -f /etc/SuSE-release ]
+		then
+			suserelease="true"
+		elif [ -f /etc/lsb-release ]
+		then
+			lsbrelease="true"
+		else
+			#Neither SuSe nor Redhat relese files were found
+			#This could be a case where suse-release package was not installed
+			#Try using the SPident command and grep for SLES to see if the version is SLES9
+			#This should resolve TFS#15363 with some added stuff to PlUtil.java
+			spcmd=`which SPident`
+			spcmdReturn=$?
+			badResult=`echo $spcmd | grep "no SPident in"`
+			if [ "$spcmd" = "" -o "$spcmdReturn" = "1" -o "$badResult" != "" ]
+			then
+				#We can not use the SPIdent command. Warn the user that the OS reporting may be incorrect
+				echo "ERROR: A proper release file was not found in /etc/"
+				echo "Please install the correct redhat-relese or suse-release package and retry the installation"
+				exit 1
+			else
+				#SPident exists, YAAAAAAAAAAAAAAAAAYYYYYYYYYYYYY
+				spidentout=`$spcmd -v | grep "CONCLUSION" | grep "SLES-9"`
+				if [ "$spidentout" != "" ]
+				then
+					#We have found that this install is SLES-9. We need to add a new file
+					#in the conf.d dir. PlUtil.java will search for this information if the other
+					#files are not found
+					if [ -d "$installdir/patchagent/update/conf.d" ]
+					then
+						echo "Adding SLES 9 Release File to Conf.d Directory"
+						echo "SUSE LINUX Enterprise Server 9" >  $installdir/patchagent/update/conf.d/SuSE-release
+					fi
+				#version=`echo $spidentout | sed "s@CONCLUSION: ServicePack Level: @@g" | sed "s@ + \"updates\" => up-to-date@@g" | sed "s@ => up-to-date@@g"`
+				fi
+			fi
+		fi
+	fi
+}
+
+##
+# Function: generateSystemProfileForMacOSX
+# Generate the System Profile for Mac OS X.
+##
+generateSystemProfileForMacOSX()
+{
+    if [ "$os" = "Darwin" ]
+    then
+        if [ -x "/usr/sbin/system_profiler" ]
+        then
+            touch "$installdir/patchagent/update/log/SystemProfile.log"
+            chmod 644 "$installdir/patchagent/update/log/SystemProfile.log"
+            system_profiler > "$installdir/patchagent/update/log/SystemProfile.log" 2>"$installdir/patchagent/update/log/SystemProfileError.log"&
+            #system_profiler SPApplicationsDataType >> "$installdir/patchagent/update/log/SystemProfile.log" &
+        fi
+    fi
+}
+
+
+##
+# Function: addSolarisSleep
+# Add shutdown script to sleep for 1 minute.
+##
+addSolarisSleep()
+{
+    if [ "$os" = "SunOS" ]
+    then
+        touch /etc/rc0.d/K99patchagentsleep
+        echo "#!/bin/sh" > /etc/rc0.d/K99patchagentsleep
+        echo "sleep 60" >> /etc/rc0.d/K99patchagentsleep
+        chmod 744 /etc/rc0.d/K99patchagentsleep
+    fi
+}
+
+
+##
+# Function: doVariousPreInstallationTasks
+# Do various pre-installation tasks.
+##
+doVariousPreInstallationTasks()
+{
+    # Verify that the computer name is ok.
+    verifyComputerNameFormat
+
+    # Append instructplagent to /etc directory with install directory at the beginning
+    cat "$plbindir/.instructplagent" | sed "s@PATCHLINK_INSTALL_DIR=\"\"@PATCHLINK_INSTALL_DIR=\"$installdir\"@" >/etc/instructplagent
+#	cp -f "$plbindir/.instructplagent" /etc/instructplagent
+    chmod 744 /etc/instructplagent
+
+    # Setup the various files required by PDDM
+    pddmInitialization
+
+    # Take care of the RedHat Linux 8 and 9 RPM hanging problem
+    handleRPMhangingProblem
+
+	#Check for Release Files or use SPIdent Command
+	verifyReleaseFileAvailable
+    # Create deploymentStatusFile with the correct permissions
+    createDeploymentStatusFile
+
+    # Generate the System Profile for Mac OS X.
+    generateSystemProfileForMacOSX
+
+    # Add shutdown script to sleep for 1 minute.
+    addSolarisSleep
+
+    # Create the directory where AIX temp patch files shall be placed.
+    createAIXTempLocation
+}
+
+macprintComputerName ()
+{
+        gmachost=`hostname`
+
+        line=`$GREP -n $1 $2 | $SED s/":.*"//g 2> /dev/null`
+        if [ "$?" -ne "0" ]; then
+          return 1
+        fi
+
+        line=`$EXPR $line + 1 2> /dev/null`
+         if [ "$?" -ne "0" ]; then
+          return 1
+        fi
+
+        hname=`$TAIL +$line $2 | $HEAD -1 | $SED s/".*<string>"//g | $SED s/"<\/string>.*"//g | $SED s/"'"//g 2> /dev/null`
+         if [ "$?" -ne "0" ]; then
+          return 1
+        fi
+
+        gmachost=`$ECHO $hname | $SED s/"[:\`$ECHO $hname | $SED s/'[[A-Z]*[a-z]*[0-9]*[-_\.]*]*'//g\`]*"//g`
+        return 0
+
+}
+
+maccomputername()
+{
+   if [ -f /Library/Preferences/SystemConfiguration/preferences.plist ]
+   then
+        macprintComputerName '>ComputerName<' /Library/Preferences/SystemConfiguration/preferences.plist
+        machost=$gmachost
+   elif [ -f /private/var/db/SystemConfiguration/preferences.xml ]
+   then
+        macprintComputerName '>ComputerName<' /private/var/db/SystemConfiguration/preferences.xml
+        machost=$gmachost
+   else
+        machost=`hostname`
+   fi
+   gmachost=$machost
+   return 0
+}
+
+##
+# Function: exitOnMissingPropertiesFile
+# Verify that the properties file exists
+##
+exitOnMissingPropertiesFile()
+{
+    if [ ! -f ./patchagent.properties ]
+    then
+        echo "The patchagent.properties files does not exist."
+        echo "Please try untarring the $product tar file again."
+        exit 1
+    fi
+}
+
+
+##
+# Function: exitOnIncorrectInstallDirectory
+# Verify that the install directory exists.
+##
+exitOnIncorrectInstallDirectory()
+{
+    if [ "x$installdir" = "x" ]
+    then
+        echo "The $installdir install directory does not exist. Please enter an existing directory."
+        exit 1
+    elif [ ! -d "$installdir" ]
+    then
+        echo "The $installdir install directory does not exist. Please enter an existing directory."
+        exit 1
+    fi
+}
+
+
+##
+# Function: exitOnIncorrectSerialNumber
+# Verify that the serial number is in the correct format.
+##
+exitOnIncorrectSerialNumber()
+{
+    snotest=`echo $serialno | sed s/"^........-........$"//g`
+    if [ ! `echo $serialno | wc -c` -eq 18 -o ! "x$snotest" = "x" ]; then # 18 because wc adds a character
+        echo
+        echo "A valid Serial Number provided by $vendor is required for the $product to register."
+        echo "Enter the Serial Number in the correct format: xxxxxxxx-xxxxxxxx"
+        exit 1
+    fi
+}
+
+
+##
+# Function: exitOnIncorrectPLUSURL
+# Verify that the PLUS URL is in the correct format.
+##
+exitOnIncorrectPLUSURL()
+{
+    url=`echo $plusurl | sed s/"^https*:\/\/.*"//g`
+    address=`echo $plusurl | sed s/"^https*:\/\/"//g`
+    if [ "x$plusurl" = "x" -o ! "x$url" = "x" -o "x$address" = "x" ]; then
+    echo
+        echo "$server address is required for the agent to register."
+        echo "Enter the $server address in the correct format: "
+        echo "http://your$vendor UpdateServerAddress OR https://your $vendor UpdateServerAddress"
+        exit 1
+    fi
+}
+
+##
+# Function: exitOnIncorrectHostName
+# Verify that the hostname isn't localhost
+##
+exitOnIncorrectHostName()
+{
+    if [ "$os" = "Darwin" ]
+    then
+      maccomputername
+      hname=$gmachost
+    else
+      hname=`/bin/hostname`
+    fi
+
+    if [ "$hname" = "LOCALHOST" -o "$hname" = "localhost" -o \
+            "$hname" = "localhost.localdomain" -o "$hname" = "LOCALHOST.LOCALDOMAIN" -o \
+            "$hname" = "" ]
+    then
+      echo
+      echo "The name of this computer is currently set to: $hname"
+      echo
+      if [ "$os" = "Darwin" ]
+      then
+        echo "Please set the name of this computer from System Preferences -> Sharing \
+              and then do the agent installation."
+        exit 1
+      else
+        echo "Please set the hostname of this computer by using 'hostname [hostname]' \
+              and then do the agent installation."
+        exit 1
+      fi
+    fi
+}
+
+##
+# Function: exitOnIncorrectPLUSURL
+# Verify that the PLUS URL is in the correct format.
+##
+exitOnIncorrectGroupsList()
+{
+	echo "Checking Group List"
+    #GroupTest=`echo $groupsList | sed s/"[0-9a-zA-Z,|= ]*"//g`
+	GroupTest=`echo $groupsList | grep [\<\>\"\'\%\;\(\)\&\+]`
+	if [ "$GroupTest" != "" ]
+	then
+        echo "Invalid characters in Group Field. <>\"\'%\;)(&+-) are invalid characters."
+		echo "Group names are mostly alphanumeric seperated by a |"
+		exit 1;
+	fi
+}
+
+
+
+##
+# Function: performManualInstallSanityTest
+# Perform sanity test for manual install.
+##
+performManualInstallSanityTest()
+{
+    echo "Performing tests for Manual install..."
+    if [ "$agentExists" = "y" ]
+    then
+        exitAsAgentAlreadyExists
+    fi
+    echo "Manual installation tests successfully completed."
+}
+
+
+##
+# Function: performSilentInstallSanityTest
+# Perform sanity test for silent install.
+##
+performSilentInstallSanityTest()
+{
+    echo "Performing tests for Silent install..."
+    if [ "$agentExists" = "y" ]
+    then
+        exitAsAgentAlreadyExists
+    fi
+
+    # Ensure PLUS URL is in the correct format.
+    exitOnIncorrectPLUSURL
+
+    # Ensure serial number is presented in the correct format.
+    exitOnIncorrectSerialNumber
+
+    # Ensure install directory exists
+    exitOnIncorrectInstallDirectory
+
+    # Ensure hostname isn't localhost
+    exitOnIncorrectHostName
+
+    # Ensure Groups List contains no special characters
+    exitOnIncorrectGroupsList
+    echo "Silent installation tests successfully completed."
+}
+
+
+##
+# Function: performHotfixInstallSanityTest
+# Perform sanity test for hotfix install.
+##
+performHotfixInstallSanityTest()
+{
+    echo "Performing tests for Hotfix install..."
+    # Ensure install directory exists
+    exitOnIncorrectInstallDirectory
+    echo "Hotfix installation tests successfully completed."
+}
+
+
+##
+# Function: performReinstallModifierSanityTest
+# Perform sanity test for reinstall modifier.
+##
+performReinstallModifierSanityTest()
+{
+    echo "Performing tests for reinstall modifier..."
+
+    if [ ! "$agentExists" = "y" ]
+    then
+        echo
+        echo "ERROR: No previous instance of the $product was detected on this system."
+        echo "       The reinstall option installs the agent over the existing installation"
+        echo "       while retaining the agent id."
+        echo "       To do a fresh install of the agent, do not use the -reinstall option."
+        echo
+        exit 1
+    fi
+
+    # stop existing instance of the agent.
+    DAUlabel=""
+    DAUlabel2=""
+    ollyd=`pwd`
+    echo "Stopping the existing instance of the agent..."
+    if [ -d "$earlier/patchagent" ]
+    then
+    	cd "$earlier/patchagent"
+
+		./patchservice stop
+    	DAUlabel="updateagentDAU"
+    	DAUlabel2="com.patchagent.updateagent"
+		agentNiceReinstall=`grep -i AGENT_NICEVALUE "$installdir/patchagent/update.conf" | sed s/".*AGENT_NICEVALUE=\""// | sed s/\"//`
+    elif [ -d "$earlier/patchlink" ]
+    then
+		if [ -f "$earlier/patchlink/patchlinkservice" ]
+		then
+    	    cd "$earlier/patchlink"
+    	    ./patchlinkservice stop
+			AgentPS=`$ps|grep gravitixagent|grep -v grep |awk '{print $2}'`
+			if [ "$AgentPS" = "" ]
+			then
+				echo "Agent process properly stopped"
+			else
+				echo "Agent PID: $AgentPS is still running. Attempting a kill."
+				echo "Attempting to kill $AgentPS"
+				kill -9 $AgentPS
+			fi
+
+		else
+			echo "Patchlinkservice was not found. Attempting manual stop."
+        	osver=`/usr/bin/sw_vers | /usr/bin/grep ProductVersion | /usr/bin/sed s/'ProductVersion:[[:space:]]*'//g`
+			echo "OS: $osver"
+	        isGreaterThanEqualTo $osver "10.5"
+	        if [ $? = 1 ]
+			then
+				ps="ps -ef"
+			else
+				ps="ps -auwwx"
+			fi
+			echo "PS: $ps"
+			AgentPS=`$ps|grep gravitixagent|grep -v grep |awk '{print $2}'`
+			if [ "$AgentPS" != "" ]
+			then
+				echo "Attempting to kill $AgentPS"
+				kill -9 $AgentPS
+			else
+				echo "Agent Process was not found. Done attempting to stop process."
+			fi
+    	fi
+        DAUlabel="patchlinkDAU"
+        DAUlabel2="com.patchlink.updateagent"
+        DAUlabel3="com.patchlink.updateagent.plist"
+    fi
+
+    if [ "$os" = "Darwin" ]
+    then
+		#/usr/bin/sw_vers |grep "10.4" >/dev/null 2>/dev/null
+        osver=`/usr/bin/sw_vers | /usr/bin/grep ProductVersion | /usr/bin/sed s/'ProductVersion:[[:space:]]*'//g`
+        isGreaterThanEqualTo $osver "10.4"
+        if [ $? = 1 ]
+        then
+            launchctl stop "$DAUlabel2"
+			launchctl unload /Library/LaunchDaemons/"$DAUlabel2" >/dev/null 2>/dev/null
+			launchctl unload /Library/LaunchDaemons/"$DAUlabel3" >/dev/null 2>/dev/null
+			deleteIfPresent /Library/LaunchDaemons/"$DAUlabel2"
+			deleteIfPresent /Library/LaunchDaemons/"$DAUlabel3"
+        fi
+    fi
+
+	#Account for the case when the patchagent/patchlink dir was removed
+	#default not new DAU name
+	if [ "$DAUlabel" = "" ]
+	then
+		"$DAUlabel" = "patchagentDAU"
+	fi
+    # kill the DAU process of the existing agent if it was running
+	performReinstallKillOldDAUprocess "$DAUlabel"
+	cd "$ollyd"
+}
+
+##
+# Funtion: isGreaterThanEqualTo
+# Compare versions for Mac OS X
+##
+isGreaterThanEqualTo()
+{
+    v1=$1
+    shift
+    v2=$1
+
+    # Extract major and minor versions
+    ver1=`echo $v1 | sed s/^10\.//g`
+    dot1=`echo $ver1 | sed s/'.*\..*'//g` # set to empty if '.' exists.
+    mjr1=`echo $ver1 | sed s/'\..*'//g`
+    if [ "$dot1" = "" ]
+    then
+        mnr1=`echo $ver1 | sed s/'.*\.'//g`
+    else
+        mnr1=""
+    fi
+
+    ver2=`echo $v2 | sed s/^10\.//g`
+    dot2=`echo $ver2 | sed s/'.*\..*'//g` # set to empty if '.' exists.
+    mjr2=`echo $ver2 | sed s/'\..*'//g`
+    if [ "$dot2" = "" ]
+    then
+        mnr2=`echo $ver2 | sed s/'.*\.'//g`
+    else
+        mnr2=""
+    fi
+
+    # Now compare
+    if [ $mjr1 -gt $mjr2 ]
+    then
+        return 1;
+    elif [ $mjr2 -gt $mjr1 ]
+    then
+        return 0;
+    elif [ "$mnr2" = "" ]
+    then
+        return 1;
+    elif [ "$mnr1" = "" ]
+    then
+        return 0;
+    elif [ $mnr1 -ge $mnr2 ]
+    then
+        return 1;
+    else
+        return 0;
+    fi
+}
+
+##
+# Funtion: performReinstallKillOldDAUprocess
+# kill the DAU process of the existing agent
+##
+performReinstallKillOldDAUprocess()
+{
+	# Determine whether an instance of DAU is already running
+	OS=`uname`
+	PS="ps -auwwwx"
+    #Add another check for input var to make sure it is something so we dont kill the system
+	dauName="$1"
+	if [ "$dauName" = "" ]
+	then
+		dauName="patchagentDAU"
+	fi
+	if [ "$OS" = "Linux" ]
+	then
+	  DAUPID=`ps auwwwx | grep "$dauName" | grep -v grep|awk '{print $2}'`
+	elif [ "$OS" = "SunOS" ]
+	then
+	  DAUPID=`/usr/ucb/ps -auwwwx | grep "$dauName" | grep -v grep|awk '{print $2}'`
+	elif [ "$OS" = "AIX" ]
+	then
+	  DAUPID=`ps -aef | grep "$dauName" | grep -v grep|awk '{print $2}'`
+	elif [ "$OS" = "Darwin" ]
+	then
+      isGreaterThanEqualTo $osver "10.5"
+      if [ $? = 1 ]
+      then
+      	PS="ps -ef"
+      else
+      	PS="ps -auwwx"
+      fi
+	  DAUPID=`$PS | grep "$dauName" | grep -v grep|awk '{print $2}'`
+	elif [ "$OS" = "HP-UX" ]
+	then
+	  DAUPID=`ps -aef | grep "$dauName" | grep -v grep|awk '{print $2}'`
+	fi
+
+	if [ "$DAUPID" != "" ]
+	then
+	    echo "Terminating the Discover Applicable Updates (DAU) task"
+	    kill -9 $DAUPID
+	fi
+}
+
+##
+# Function: performAsUserModifierSanityTest
+# Perform sanity test for asuser modifier.
+##
+performAsUserModifierSanityTest()
+{
+    echo "Performing tests for asuser modifier..."
+    fngrusr=`finger $asuser 2>&1 | head -1 | grep 'no such user'`
+    if [ ! "x$fngrusr" = "x" ]
+    then
+        echo "Error: $asuser does not exist."
+        exit 1
+    fi
+}
+
+
+##
+# Function: performDetectOnlyModifierSanityTest
+# Perform sanity test for detectonly modifier.
+##
+performDetectOnlyModifierSanityTest()
+{
+    echo "Performing tests for detectonly modifier..."
+}
+
+
+##
+# Function: doBasicSanityTests
+# For the type of install currently underprogress verify that all required
+# information is available and in the proper format.
+##
+doBasicSanityTests()
+{
+    if [ "$reinstall" = "n" ]
+    then
+        if [ "$installtype" = "manual" ]
+        then
+            performManualInstallSanityTest
+        elif [ "$installtype" = "silent" ]
+        then
+            performSilentInstallSanityTest
+        elif [ "$installtype" = "hotfix" ]
+        then
+            performHotfixInstallSanityTest
+        else
+            echo "ERROR: Unknown installtype $installtype"
+            exit 1
+        fi
+    else
+        if [ "$reinstall" = "y" ]
+        then
+            performReinstallModifierSanityTest
+        fi
+    fi
+
+    if [ "$detectonly" = "y" ]
+    then
+        performDetectOnlyModifierSanityTest
+    fi
+
+    if [ "$asuser" = "root" -o "x$asuser" = "x" ]
+    then
+        :
+    else
+        performAsUserModifierSanityTest
+    fi
+
+    # Ensure properties file is found
+    exitOnMissingPropertiesFile
+}
+
+##
+# Function: verifyRegistration
+# Verify whether the agent registered successfully.
+##
+verifyRegistration()
+{
+
+    cp -f "$patchlinkdir/update.conf" "$patchlinkdir/update/log/update.conf.AtRegistration"
+    agentid=`grep -i AgentID "$patchlinkdir/update.conf" | sed s/".*AgentID="// | sed s/\"//g`
+    if [ `echo  $agentid | wc -c` -lt 30 ] # incorrect agent id
+    then
+        return 1;
+    else # the registration was successful
+        return 0;
+    fi
+}
+
+
+##
+# Function: deleteIfPresent
+# Delete the specified file if present.
+##
+deleteIfPresent()
+{
+    filepath=$1
+    if [ -f $filepath ]
+    then
+        rm -f $filepath
+    fi
+
+    if [ -h $filepath ]
+    then
+        rm -f $filepath
+    fi
+}
+
+
+##
+# Function: cleanRegistrationTrace
+# To be invoked to clean up a failed registration
+# attempt.
+##
+cleanRegistrationTrace()
+{
+    deleteIfPresent "/Library/StartupItems/patchagent/patchagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/S99patchagent"
+	deleteIfPresent "/etc/rc3.d/S99patchagent"
+	deleteIfPresent "/etc/rc3.d/S99patchagent"
+	deleteIfPresent "/etc/rc5.d/S99patchagent"
+	deleteIfPresent "/etc/rc5.d/S99patchagent"
+	deleteIfPresent "/sbin/rc3.d/S901patchagent"
+	deleteIfPresent "/etc/rc0.d/K02patchagent"
+	deleteIfPresent "/etc/rc1.d/K02patchagent"
+	deleteIfPresent "/etc/rc2.d/K02patchagent"
+	deleteIfPresent "/etc/rc3.d/K02patchagent"
+	deleteIfPresent "/etc/rc4.d/K02patchagent"
+	deleteIfPresent "/etc/rc5.d/K02patchagent"
+	deleteIfPresent "/etc/rc6.d/K02patchagent"
+	deleteIfPresent "/etc/rcS.d/K02patchagent"
+	deleteIfPresent "/etc/rc0.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc1.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc2.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc3.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc4.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc5.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc6.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc0.d/K20patchagent"
+	deleteIfPresent "/etc/rc1.d/K20patchagent"
+	deleteIfPresent "/etc/rc2.d/S20patchagent"
+	deleteIfPresent "/etc/rc3.d/S20patchagent"
+	deleteIfPresent "/etc/rc4.d/S20patchagent"
+	deleteIfPresent "/etc/rc5.d/S20patchagent"
+	deleteIfPresent "/etc/rc6.d/K20patchagent"
+	deleteIfPresent "/etc/rc0.d/K50patchagent"
+	deleteIfPresent "/etc/rc1.d/K50patchagent"
+	deleteIfPresent "/etc/rc2.d/K50patchagent"
+	deleteIfPresent "/etc/rc3.d/K50patchagent"
+	deleteIfPresent "/etc/rc4.d/K50patchagent"
+	deleteIfPresent "/etc/rc5.d/K50patchagent"
+	deleteIfPresent "/etc/rc6.d/K50patchagent"
+	deleteIfPresent "/etc/rcS.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc0.d/S99patchagent"
+	deleteIfPresent "/etc/rc1.d/S99patchagent"
+	deleteIfPresent "/etc/rc2.d/S99patchagent"
+	deleteIfPresent "/etc/rc3.d/S99patchagent"
+	deleteIfPresent "/etc/rc4.d/S99patchagent"
+	deleteIfPresent "/etc/rc5.d/S99patchagent"
+	deleteIfPresent "/etc/rc6.d/S99patchagent"
+	deleteIfPresent "/etc/rcS.d/S99patchagent"
+	deleteIfPresent "/etc/rc0.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc1.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc2.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc3.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc4.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc5.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc6.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc0.d/S50patchagent"
+	deleteIfPresent "/etc/rc1.d/S50patchagent"
+	deleteIfPresent "/etc/rc2.d/S50patchagent"
+	deleteIfPresent "/etc/rc3.d/S50patchagent"
+	deleteIfPresent "/etc/rc4.d/S50patchagent"
+	deleteIfPresent "/etc/rc5.d/S50patchagent"
+	deleteIfPresent "/etc/rc6.d/S50patchagent"
+	deleteIfPresent "/etc/rc0.d/K50patchlinkagent"
+	deleteIfPresent "/etc/rc1.d/K50patchlinkagent"
+	deleteIfPresent "/etc/rc2.d/K50patchlinkagent"
+	deleteIfPresent "/etc/rc3.d/K50patchlinkagent"
+	deleteIfPresent "/etc/rc4.d/K50patchlinkagent"
+	deleteIfPresent "/etc/rc5.d/K50patchlinkagent"
+	deleteIfPresent "/etc/rc6.d/K50patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc0.d/K50patchagent"
+	deleteIfPresent "/etc/rc.d/rc1.d/K50patchagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/K50patchagent"
+	deleteIfPresent "/etc/rc.d/rc3.d/K50patchagent"
+	deleteIfPresent "/etc/rc.d/rc4.d/K50patchagent"
+	deleteIfPresent "/etc/rc.d/rc5.d/K50patchagent"
+	deleteIfPresent "/etc/rc.d/rc6.d/K50patchagent"
+	deleteIfPresent "/etc/rc.d/rc0.d/S50patchagent"
+	deleteIfPresent "/etc/rc.d/rc1.d/S50patchagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/S50patchagent"
+	deleteIfPresent "/etc/rc.d/rc3.d/S50patchagent"
+	deleteIfPresent "/etc/rc.d/rc4.d/S50patchagent"
+	deleteIfPresent "/etc/rc.d/rc5.d/S50patchagent"
+	deleteIfPresent "/etc/rc.d/rc6.d/S50patchagent"
+	deleteIfPresent "/etc/rc6.d/S50patchlinkagent"
+	deleteIfPresent "/etc/rc0.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc1.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc2.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc3.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc4.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc5.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc6.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rcS.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc0.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rc1.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rc3.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rc4.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rc5.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rc6.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rcS.d/K02patchagent"
+	deleteIfPresent "/etc/rc.d/rc0.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc1.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc3.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc4.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc5.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc6.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rcS.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc0.d/S99patchagent"
+	deleteIfPresent "/etc/rc.d/rc1.d/S99patchagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/S99patchagent"
+	deleteIfPresent "/etc/rc.d/rc3.d/S99patchagent"
+	deleteIfPresent "/etc/rc.d/rc4.d/S99patchagent"
+	deleteIfPresent "/Library/LaunchDaemons/com.patchlink.updateagent"
+	deleteIfPresent "/Library/LaunchDaemons/com.patchagent.updateagent"
+	deleteIfPresent "/Library/LaunchDaemons/com.patchagent.updateagent.plist"
+	deleteIfPresent "/Library/StartupItems/patchlink/patchlink"
+	deleteIfPresent "/etc/rc.d/rc5.d/S99patchagent"
+	deleteIfPresent "/etc/rc.d/rc6.d/S99patchagent"
+	deleteIfPresent "/etc/rc.d/rcS.d/S99patchagent"
+	deleteIfPresent "/etc/rc.d/rc0.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc1.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc3.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc4.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc5.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rc6.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc.d/rcS.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc0.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rc1.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rc1.d/K21patchagent"
+	deleteIfPresent "/etc/init.d/rc2.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rc2.d/K21patchagent"
+	deleteIfPresent "/etc/init.d/rc3.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rc3.d/K21patchagent"
+	deleteIfPresent "/etc/init.d/rc4.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rc5.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rc5.d/K21patchagent"
+	deleteIfPresent "/etc/init.d/rc6.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rcS.d/K02patchagent"
+	deleteIfPresent "/etc/init.d/rc0.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc1.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc2.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc3.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc4.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc5.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc6.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rcS.d/K02patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc0.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rc1.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rc1.d/S01patchagent"
+	deleteIfPresent "/etc/init.d/rc2.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rc2.d/S01patchagent"
+	deleteIfPresent "/etc/init.d/rc3.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rc3.d/S01patchagent"
+	deleteIfPresent "/etc/init.d/rc4.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rc5.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rc5.d/S01patchagent"
+	deleteIfPresent "/etc/init.d/rc6.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rcS.d/S99patchagent"
+	deleteIfPresent "/etc/init.d/rc0.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc1.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc2.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc3.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc4.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc5.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rc6.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rcS.d/S99patchlinkagent"
+	deleteIfPresent "/etc/init.d/rcS.d/S01patchagent"
+	deleteIfPresent "/sbin/init.d/patchlink"
+	deleteIfPresent "/sbin/init.d/patchagent"
+	deleteIfPresent "/etc/init.d/patchlink"
+	deleteIfPresent "/etc/init.d/patchagent"
+	deleteIfPresent "/etc/rc0.d/K99patchlinksleep"
+	deleteIfPresent "/etc/rc0.d/K99patchagentsleep"
+	deleteIfPresent "/sbin/rc2.d/K200patchagent"
+	deleteIfPresent "/sbin/rc3.d/S901patchagent"
+	deleteIfPresent "/etc/rc.d/rc2.d/S99PatchLinkAgent"
+	deleteIfPresent "/etc/rc3.d/S99PatchLinkAgent"
+	deleteIfPresent "/etc/rc3.d/S99patchlinkagent"
+	deleteIfPresent "/etc/rc5.d/S99PatchLinkAgent"
+	deleteIfPresent "/etc/rc5.d/S99patchlinkagent"
+	deleteIfPresent "/sbin/rc3.d/S901PatchLinkAgent"
+	deleteIfPresent "/etc/rc0.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc1.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc2.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc3.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc4.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc5.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rc6.d/K02patchlinkagent"
+	deleteIfPresent "/etc/rcS.d/K02patchlinkagent"
+	deleteIfPresent "/sbin/init.d/patchlink"
+	deleteIfPresent "/sbin/init.d/patchlinkagent"
+	deleteIfPresent "/etc/init.d/patchlink"
+	deleteIfPresent "/etc/init.d/patchlinkagent"
+	deleteIfPresent "/etc/rc0.d/K99patchagentsleep"
+	deleteIfPresent "/tmp/hostnameOutput"
+	deleteIfPresent "/etc/rc0.d/K99patchlinksleep"
+	deleteIfPresent "/etc/rc0.d/K99patchagentsleep"
+	deleteIfPresent "/tmp/ifconfigoutputmac"
+	deleteIfPresent "/sbin/rc2.d/K200patchlinkagent"
+	deleteIfPresent "/sbin/rc3.d/S901patchlinkagent"
+	deleteIfPresent "/Library/LaunchDaemons/com.patchagent.updateagent"
+	deleteIfPresent "/Library/LaunchDaemons/com.patchagent.updateagent.plist"
+	deleteIfPresent "/Library/StartupItems/patchlink/patchlink"
+	deleteIfPresent "/etc/rc.d/rc2.d/S99patchagent"
+	deleteIfPresent "/etc/rc3.d/S99patchagent"
+	deleteIfPresent "/etc/rc3.d/S99patchagent"
+	deleteIfPresent "/etc/rc5.d/S99patchagent"
+	deleteIfPresent "/etc/rc5.d/S99patchagent"
+	deleteIfPresent "/sbin/rc3.d/S901patchagent"
+	deleteIfPresent "/etc/rc0.d/K02patchagent"
+	deleteIfPresent "/etc/rc1.d/K02patchagent"
+	deleteIfPresent "/etc/rc2.d/K02patchagent"
+	deleteIfPresent "/etc/rc3.d/K02patchagent"
+	deleteIfPresent "/etc/rc4.d/K02patchagent"
+	deleteIfPresent "/etc/rc5.d/K02patchagent"
+	deleteIfPresent "/etc/rc6.d/K02patchagent"
+	deleteIfPresent "/etc/rcS.d/K02patchagent"
+	deleteIfPresent "/sbin/init.d/patchlink"
+	deleteIfPresent "/etc/init.d/patchlink"
+	deleteIfPresent "/etc/init.d/patchagent"
+	deleteIfPresent "/etc/rc.d/init.d/patchagent"
+	deleteIfPresent "/var/lock/subsys/patchagent"
+	deleteIfPresent "/tmp/domainnameOutput"
+	deleteIfPresent "/tmp/hostnameOutput"
+	deleteIfPresent "/tmp/ifconfigOutput"
+	deleteIfPresent "/tmp/ifconfigoutputmac"
+	deleteIfPresent "/tmp/.patchlinkdelme"
+	deleteIfPresent "/deploymentStatusFile"
+
+    if [ "$os" = "Darwin" ]
+    then
+        if [ -d ~/Library/PreferencePanes/patchagent.prefPane ]
+        then
+            rm -rf ~/Library/PreferencePanes/patchagent.prefPane
+            rm -rf ~/Library/PreferencePanes/patchlink.prefPane
+        fi
+		rm -fr /Library/StartupItems/patchlink
+    fi
+}
+
+
+##
+# Function: changeOwnerIfRequired
+# Change the owner of the patchlink directory if the asuser modifier
+# was provided.
+##
+changeOwnerIfRequired()
+{
+    if [ "$asuser" = "root" -o "x$asuser" = "x" ]
+    then
+        :
+    else
+        if [ "$colon" = ":" ]
+        then
+            chown -R $asuser:$asgroup "$installdir/patchagent"
+        else
+            chown -R $asuser "$installdir/patchagent"
+        fi
+    fi
+}
+
+
+##
+# Function: registerIfRequired
+# Depending upon the install type perform the agent registration.
+# Verify successful registration and exit if unsuccessful.
+##
+registerIfRequired()
+{
+    cd "$patchlinkdir/update/bin"
+
+    if [ "$reinstall" = "y" ]
+    then
+        # For reinstall modifier we have two cases:
+        # 1. The install happens in the same directory as the existing agent.
+        #    This case is the same as hotfix.
+        # 2. The install happens in the different directory that the existing agent's.
+        #
+        # The key is to retain the agentid across installations.
+
+        echo Existing $product is installed here in $earlier
+
+        if [ "$installdir" = "$earlier" -o "$installdir" = "$earlier/" ]
+        then
+            echo Reinstalling over exising $product...
+        else
+            echo Reinstalling in a different directory...
+            cp -f "$earlier/patchagent/update.conf" "$installdir/patchagent/update.conf"
+        fi
+
+        if [ "$isanotheruser" = "n" ]
+        then
+          ./register "-noquery"
+        else
+          ./register "-noquery" "-user" $asuser
+        fi
+    else
+        if [ "$installtype" = "manual" ]
+        then
+            if [ "$isanotheruser" = "n" ]
+            then
+                ./register
+            else
+                ./register "-user" $asuser
+            fi
+            verifyRegistration
+            result=$?
+
+            if [ "$result" = "1" ]
+            then
+                echo
+				echo "ERROR: The $product files were properly installed to $installdir but did not register successfully."
+				echo "Please check the serial number and hostname for errors."
+                echo
+				cleanRegistrationTrace
+                exit 5
+            fi
+        fi
+
+        if [ "$installtype" = "silent" ]
+        then
+            touch "$installdir/patchagent/update/bin/.values"
+            rm -f "$installdir/patchagent/update/bin/.values"
+            echo "INSTALLDIR=\"$installdir\"" >> "$installdir/patchagent/update/bin/.values"
+            echo "GROUPSLIST=$groupsList" >> "$installdir/patchagent/update/bin/.values"
+            echo "PLUSURL=$plusurl" >> "$installdir/patchagent/update/bin/.values"
+            echo "SERIALNO=$serialno" >> "$installdir/patchagent/update/bin/.values"
+            echo "PROXY=$proxy" >> "$installdir/patchagent/update/bin/.values"
+            echo "PORT=$port" >> "$installdir/patchagent/update/bin/.values"
+            echo "USER=$proxyuser" >> "$installdir/patchagent/update/bin/.values"
+            echo "PASSWORD=$proxypassword" >> "$installdir/patchagent/update/bin/.values"
+            echo "SERVICE=$service" >> "$installdir/patchagent/update/bin/.values"
+            echo "AGENTNICE=$agentNice" >> "$installdir/patchagent/update/bin/.values"
+            if [ "$isanotheruser" = "n" ]
+            then
+                ./register "-silent"
+            else
+                ./register "-silent" "-user" $asuser
+            fi
+            verifyRegistration
+            result=$?
+            if [ "$result" = "1" ]; then
+                echo
+				echo "ERROR: The $product files were properly installed to $installdir but did not register successfully."
+				echo "Please check the serial number and hostname for errors."
+                echo
+                cleanRegistrationTrace
+                exit 5
+            fi
+        fi
+
+        if [ "$installtype" = "hotfix" ]
+        then
+            ./register "-noquery"
+        fi
+    fi
+}
+
+
+##
+# Function: createHPpidfile
+# Store the process id of the agent process.
+##
+createHPpidfile()
+{
+    PID=$1
+    echo $PID > "${patchlinkdir}/.plAgentPID"
+    chmod 600 "${patchlinkdir}/.plAgentPID"
+    #echo "$product started with PID $PID"
+}
+
+
+##
+# Function: startAgentIfRequired
+# Start the agent if the current installation modifier requires that.
+##
+startAgentIfRequired()
+{
+	sleep 3
+    if [ "$detectonly" = "y" ]
+    then
+        echo "Converting the $product to detect only."
+        mv -f "$installdir/patchagent/update/bin/gravitixagent.class" \
+              "$installdir/patchagent/update/bin/gravitixagent.class.detectonly"
+    else
+        darwin104Greater=""
+		pre104message=""
+		niceval=""
+		isRH2=""
+		if [ "$os" = "Linux" ]
+		then
+			if [ -f /etc/redhat-release ]
+			then
+        	isRH2=`grep 'Red Hat Linux' /etc/redhat-release | grep 'release 2.[0-9]*' 2>/dev/null`
+			fi
+		fi
+
+		echo "Now starting $product..."
+		if [ "$reinstall" = "n" ]
+		then
+			agentNice=`grep -i AGENT_NICEVALUE "$installdir/patchagent/update.conf" | sed s/".*AGENT_NICEVALUE=\""// | sed s/\"//`
+        else
+			if [ "$agentNiceReinstall" != "" ]
+			then
+				agentNice="$agentNiceReinstall"
+			fi
+		fi
+		if [ "$os" = "Darwin" ]
+        then
+           #/usr/bin/sw_vers |grep "10.4" >/dev/null 2>/dev/null
+        	osver=`/usr/bin/sw_vers | /usr/bin/grep ProductVersion | /usr/bin/sed s/'ProductVersion:[[:space:]]*'//g`
+	        isGreaterThanEqualTo $osver "10.4"
+   			if [ $? = 1 ]
+        	then
+					darwin104Greater="true"
+			else
+					pre104message="Some fucntionality may not be available until the system is rebooted."
+			fi
+		fi
+		if [ "$darwin104Greater" = "true" ]
+		then
+					#Start the agent using launchctl.  This part used to be in the addControlPanel function.
+				    cat "$installdir"/patchagent/update/bin/.launchd.template | sed "s|@@INSTALLDIR@@|$installdir|g" >/Library/LaunchDaemons/com.patchagent.updateagent.plist
+#Added next four lines to set the agent nice value before starting the agent process
+				    #agentNice=`grep -i AGENT_NICEVALUE "$installdir/patchagent/update.conf" | sed s/".*AGENT_NICEVALUE=\""// | sed s/\"//`
+
+					if [ "x$agentNice" = "x" ]
+					then
+						agentNice="0"
+					fi
+					cat /Library/LaunchDaemons/com.patchagent.updateagent.plist | sed s/"<string>-*[0-9][0-9]*"/"<string>$agentNice"/ >/Library/LaunchDaemons/com.patchagent.updateagent.tmp
+				    cp /Library/LaunchDaemons/com.patchagent.updateagent.tmp /Library/LaunchDaemons/com.patchagent.updateagent.plist
+				    rm -fr /Library/LaunchDaemons/com.patchagent.updateagent.tmp
+
+				    touch "$installdir"/patchagent/update/log/updateagent.log
+				    touch 660 "$installdir"/patchagent/update/log/updateagent.log
+
+				    launchctl unload /Library/LaunchDaemons/com.patchlink.updateagent.plist >/dev/null 2>/dev/null
+				    launchctl unload /Library/LaunchDaemons/com.patchagent.updateagent.plist >/dev/null 2>/dev/null #>/dev/null 2>/dev/null
+				    launchctl load /Library/LaunchDaemons/com.patchagent.updateagent.plist #>/dev/null 2>/dev/null
+				    launchctl start com.patchagent.updateagent #>/dev/null 2>/dev/null
+				    isGreaterThanEqualTo $osver "10.5"
+				    if [ $? = 1 ]
+					then
+						ps="ps -ef"
+				    else
+						ps="ps -auwwx"
+					fi
+					$ps |grep gravitixagent |grep -v grep |awk '{print $2}' > "$installdir/patchagent/agent.pid"
+       	else
+				change=""
+				if [ "x$agentNice" != "x" ]
+				then
+					niceval="$agentNice"
+					if [ "$os" = "AIX" -o "$os" = "SunOS" -o "$os" = "HP-UX" ]
+	                then
+                        if [ "$agentNice" -gt 39 ]
+                        then
+                                echo "Nice Value is Greater Than 39. Setting to Highest Allowed Nice Value of 39"
+                                agentNice=39
+								change="true"
+                        elif [ "$agentNice" -lt 0 ]
+                        then
+                                echo "Nice Value is Less Than 0. Setting to Lowest Allowed Nice Value of 0"
+                                agentNice=0
+								change="true"
+                        fi
+    	            else
+                        if [ "$agentNice" -gt 19 ]
+                        then
+                                echo "Nice Value is Greater Than 19. Setting to Highest Allowed Nice Value of 19"
+                                agentNice=19
+								change="true"
+                        elif [ "$agentNice" -lt -19 ]
+                        then
+                                echo "Nice Value is Less Than -19. Setting to Lowest Allowed Nice Value of -19"
+                                agentNice=-19
+								change="true"
+        	             fi
+            	    fi
+
+				fi
+				if [ "$os" = "AIX" -o "$os" = "SunOS" -o "$os" = "HP-UX" ]
+				then
+					defaultNice=20
+					setNicetmp=0
+					if [ "$niceval" = "" ]
+					then
+						niceval=20
+					fi
+					if [ "$niceval" -gt "$defaultNice" ]
+					then
+						setNicetmp=`expr $niceval - $defaultNice`
+					elif [ "$niceval" -lt "$defaultNice" ]
+					then
+						setNicetmp=`expr $defaultNice - $niceval`
+						setNicetmp="-$setNicetmp"
+					elif [ "$niceval" -eq "$defaultNice" ]
+					then
+						setNicetmp=0
+					fi
+						niceval=$setNicetmp
+				fi
+				if [ "x$isRH2" != "x" ]
+				then
+					#We need to do some extra stuff for RedHat 2.x
+					#For whatever reason RH2 seems to start with a default of 5 instead of 0
+					defaultNice=5
+					setNicetmp=0
+					if [ "$niceval" = "" ]
+					then
+						niceval=0
+					fi
+					if [ "$niceval" -gt "$defaultNice" ]
+					then
+						setNicetmp=`expr $niceval - $defaultNice`
+					elif [ "$niceval" -lt "$defaultNice" ]
+					then
+						setNicetmp=`expr $defaultNice - $niceval`
+						setNicetmp="-$setNicetmp"
+					elif [ "$niceval" -eq "$defaultNice" ]
+					then
+						setNicetmp=0
+					fi
+					niceval=$setNicetmp
+				fi
+				if [ "$niceval" = "" ]
+				then
+					if [ "x$isRH2" != "x" ]
+					then
+						niceval="-5"
+					else
+						niceval="0"
+					fi
+				fi
+
+				if [ "$os" = "HP-UX" ]
+				then
+					if [ "$isanotheruser" = "n" ]
+					then
+						nohup nice -n $niceval java -XdoCloseWithReadPending -Djava.endorsed.dirs=. -Dsun.net.inetaddr.ttl=60 -Dsun.net.inetaddr.negative.ttl=60 gravitixagent >> $logfile 2>&1 &
+
+					else
+						su $asuser -c 'nohup nice -n $niceval java -XdoCloseWithReadPending -Djava.endorsed.dirs=. -Dsun.net.inetaddr.ttl=60 -Dsun.net.inetaddr.negative.ttl=60 gravitixagent >> $logfile 2>&1 &'
+					fi
+					createHPpidfile "$!"
+				else
+					if [ "$isanotheruser" = "n" ]
+					then
+						nohup nice -n $niceval java -Dupdateagent -Djava.endorsed.dirs=. -Dsun.net.inetaddr.ttl=60 -Dsun.net.inetaddr.negative.ttl=60 gravitixagent >> $logfile 2>&1 &
+					else
+						if [ "$os" = "Darwin" -o "$os" = "Linux" ]
+						then
+							sudo -u $asuser nohup nice -n $niceval java -Dupdateagent -Djava.endorsed.dirs=. -Dsun.net.inetaddr.ttl=60 -Dsun.net.inetaddr.negative.ttl=60 gravitixagent >> $logfile 2>&1 &
+						else
+							su $asuser -c 'nohup nice -n $niceval java -Dupdateagent -Djava.endorsed.dirs=. -Dsun.net.inetaddr.ttl=60 -Dsun.net.inetaddr.negative.ttl=60 gravitixagent >> $logfile 2>&1 &'
+						fi
+					fi
+				fi
+		        newpid=$!
+        		echo $newpid > "${installdir}/patchagent/agent.pid"
+		fi
+		if [ -f "$installdir/patchagent/agent.pid" ]
+		then
+			newpid=`cat "$installdir/patchagent/agent.pid"`
+		else
+			echo "An error occured while starting the agent process. Please retry the installation using the -reinstall flag"
+			exit 1
+		fi
+		niceLoc=8
+		if [ "$os" = "Darwin" ]
+		then
+			niceLoc=6
+			osver=`/usr/bin/sw_vers | /usr/bin/grep ProductVersion | /usr/bin/sed s/'ProductVersion:[[:space:]]*'//g`
+	        isGreaterThanEqualTo $osver "10.5"
+			if [ $? = 1 ]
+            then
+            	niceLoc=7
+			fi
+		fi
+		#add a delay for OS that do  not initially start with teh right nice value.
+
+		sleep 2
+		agentNice=`ps -l -p $newpid | grep -v 'NI' | awk '{print $'$niceLoc'}'`
+		agentNiceConf=`grep -i AGENT_NICEVALUE "$installdir/patchagent/update.conf" | sed s/".*AGENT_NICEVALUE=\""// | sed s/\"//`
+	   	cp "$installdir/patchagent/update.conf" "$installdir/patchagent/update.conf.bak"
+		echo "Setting update.conf File with Correct Nice Value of $agentNice."
+		retry=0
+		while [ "$agentNice" != "$agentNiceConf" -a $retry -lt 6 ]
+		do
+            if [ -f "$installdir/patchagent/update.conf.tmp" ]
+	        then
+       	        rm -fr "$installdir/patchagent/update.conf.tmp"
+	        fi
+	        cat "$installdir/patchagent/update.conf" | sed s/"_NICEVALUE=\"-*[0-9]*[0-9]*"/"_NICEVALUE=\"$agentNice"/g >$installdir/patchagent/update.conf.tmp
+	        cp "$installdir/patchagent/update.conf.tmp" "$installdir/patchagent/update.conf"
+	        if [ -f "$installdir/patchagent/update.conf" -a -s "$installdir/patchagent/update.conf" ]
+	        then
+       	        rm -fr "$installdir/patchagent/update.conf.tmp"
+	        else
+       	        echo "Copying update file to update.conf.  Restoring update.conf.bak"
+           	    cp "$installdir/patchagent/update.conf.bak" "$installdir/patchagent/update.conf"
+	        fi
+			agentNice=`ps -l -p $newpid | grep -v 'NI' | awk '{print $'$niceLoc'}'`
+			if [ "x$isRH2" = "x" -o "x$agentNiceConf" = "x" -o "x$change" != "x" ]
+			then
+				agentNiceConf=`grep -i AGENT_NICEVALUE "$installdir/patchagent/update.conf" | sed s/".*AGENT_NICEVALUE=\""// | sed s/\"//`
+				change=""
+			fi
+			sleep 1
+			retry=`expr $retry + 1`
+		done
+	    echo "$product started with pid $newpid and nice value $agentNice"
+		echo "$pre104message"
+
+		#RedHat init script fix
+		if [ "$os" = "Linux" ]
+		then
+			if [ `grep -i Ubuntu /etc/lsb-release 2>/dev/null | wc -c` -ge 1 ]; then
+				test=`/usr/sbin/update-rc.d patchagent defaults 2>/dev/null`
+			else
+				test=`/sbin/chkconfig --level 35 patchagent on`
+			fi
+		fi
+    fi
+}
+
+
+##
+# Function: postInstallSteps
+# Perform post installation steps
+##
+postInstallSteps()
+{
+    echo REGISTERED > "$installdir/patchagent/update/log/state"
+
+    if [ "$os" = "Linux" ]
+    then
+      [ -d /var/lock/subsys ] || mkdir -p /var/lock/subsys
+      if [ "$isanotheruser" = "n" ]
+      then
+        touch /var/lock/subsys/patchagent
+      else
+        sudo -u $asuser touch /var/lock/subsys/patchagent
+      fi
+    fi
+
+    # pointers to important log files
+    echo
+    echo "View the $product logs in $installdir/patchagent/update/log"
+    echo
+    echo To uninstall the $product, run:
+    echo "       cd $installdir/patchagent"
+    echo "       ./uninstall"
+}
+
+
+##
+# Function: addControlPanel
+# Add a control panel to Mac OS X.
+##
+addControlPanel()
+{
+		PREFPATH="/System/Library/PreferencePanes"
+    if [ "$os" = "Darwin" ]
+    then
+	  if [ -d /Library/PreferencePanes/patchlink ]
+	  then
+		rm -fr /Library/PreferencePanes/patchlink
+	  fi
+	  if [ -d /Library/PreferencePanes/PatchLinkAgent.prefPane ]
+	  then
+		rm -fr /Library/PreferencePanes/PatchLinkAgent.prefPane
+	  fi
+      [ -d $PREFPATH ] || mkdir -p $PREFPATH
+      cd $PREFPATH
+      tar xfz "$installdir/patchagent/update/bin/MacOSXControlPanel.tgz"
+      #change the control panel icon
+      cd $PREFPATH/PatchAgent.prefPane/Contents/Resources
+      if [ -f ./PatchAgentPref.tiff ]
+      then
+      	rm -f ./PatchAgentPref.tiff
+      fi
+      #vend=`grep "vendor=" "$installdir/patchagent/update/bin/patchagent.properties" | sed 's/vendor=//g'`
+
+	  if [ "$vendor" = "Symantec" ]
+      then
+      	cp ./SymantecIcon.tiff ./PatchAgentPref.tiff
+      elif [ "$vendor" = "Novell" ]
+      then
+        cp ./NovellIcon.tiff ./PatchAgentPref.tiff
+      elif [ "$vendor" = "New Boundary" ]
+      then
+        cp ./NewBoundaryIcon.tiff ./PatchAgentPref.tiff
+      elif [ "$vendor" = "Norman" ]
+      then
+        cp ./NormanIcon.tiff ./PatchAgentPref.tiff
+      elif [ "$vendor" = "Lumension" ]
+      then
+      	cp ./PatchagentIcon.tiff ./PatchAgentPref.tiff
+      fi
+      cd $PREFPATH
+#     /usr/bin/sw_vers |grep "10.4" >/dev/null 2>/dev/null
+#	 osver=`/usr/bin/sw_vers | /usr/bin/grep ProductVersion | /usr/bin/sed s/'ProductVersion:[[:space:]]*'//g`
+#     isGreaterThanEqualTo $osver "10.4"
+#     if [ $? = 1 ]
+#      then
+#
+#		cat "$installdir"/patchagent/update/bin/.launchd.template | sed "s|@@INSTALLDIR@@|$installdir|g" >/Library/LaunchDaemons/com.patchagent.updateagent
+#       #Added next four lines to set the agent nice value before starting the agent process
+#		agentNice=`grep -i AGENT_NICEVALUE "$installdir/patchagent/update.conf" | sed s/".*AGENT_NICEVALUE=\""// | sed s/\"//`
+#		cat /Library/LaunchDaemons/com.patchagent.updateagent | sed s/"<string>-*[0-9][0-9]*"/"<string>$agentNice"/ >/Library/LaunchDaemons/com.patchagent.updateagent.tmp
+#        cp /Library/LaunchDaemons/com.patchagent.updateagent.tmp /Library/LaunchDaemons/com.patchagent.updateagent
+#		rm -fr /Library/LaunchDaemons/com.patchagent.updateagent.tmp
+#
+#		touch "$installdir"/patchagent/update/log/updateagent.log
+#        touch 660 "$installdir"/patchagent/update/log/updateagent.log
+#
+#        launchctl unload /Library/LaunchDaemons/com.patchlink.updateagent >/dev/null 2>/dev/null
+#        launchctl unload /Library/LaunchDaemons/com.patchagent.updateagent >/dev/null 2>/dev/null #>/dev/null 2>/dev/null
+#        launchctl load /Library/LaunchDaemons/com.patchagent.updateagent #>/dev/null 2>/dev/null
+#        launchctl start com.patchagent.updateagent #>/dev/null 2>/dev/null
+#		isGreaterThanEqualTo $osver "10.5"
+#		if [ $? = 1 ]
+#		then
+#			ps="ps -ef"
+#		else
+#			ps="ps -auwwx"
+#		fi
+#		$ps |grep gravitixagent |grep -v grep |awk '{print $2}' > "$installdir/patchagent/agent.pid"
+#      else
+#        echo "Thank you for installing Update Agent."
+#        echo "Some functionality may not be available until the system"
+#        echo "is rebooted. Please reboot as soon as possible.       "
+#      fi
+    fi
+}
+
+
+##This adds the agent to the /Applications folder so that is shows up in System Profiler
+addSoftwareApp()
+{
+	if [ "$os" = "Darwin" ]
+	then
+		if [ -d /Applications ]
+		then
+			cd /Applications
+			if [ -d "$product.app" ]
+			then
+				rm -fr "$product.app"
+			fi
+      		mkdir "$product.app" "$product.app/Contents"
+			if [ -d "$product.app" ]
+			then
+				cd "$product.app/Contents"
+				#cp "$installdir/patchagent/update/bin/Info.plist" ./
+				echo "APPL????" > PkgInfo
+				#We need to replace the values in the PLIST file for the correct brand
+			    cat "$installdir"/patchagent/update/bin/Info.plist.template | sed "s|@@VERSION@@|$AGENT_VERSION|g" >Info.plist
+				cat Info.plist | sed "s|@@PRODUCT@@|$product|g" >Info.plist.tmp
+				rm -fr Info.plist
+				mv Info.plist.tmp Info.plist
+				cat Info.plist | sed "s|@@VENDOR@@|$vendor|g" >Info.plist.tmp
+				rm -fr Info.plist
+				mv Info.plist.tmp Info.plist
+				cat Info.plist | sed "s|@@MANUFACTURER@@|$manufacturer|g" >Info.plist.tmp
+				rm -fr Info.plist
+				mv Info.plist.tmp Info.plist
+                if [ -d "$installdir/patchagent/$product.app" ]
+                then
+                	rm -fr "$installdir/patchagent/$product.app"
+                fi
+                #Have to move the file out of applications since it doesnt really do anything
+				#Moving straight to install dir does not work because OSX does not search private/var by default
+				#doing it this way causes OSX to keep track of where it moved to.
+				system_profiler SPApplicationsDataType | grep "Patch Agent" >/dev/null
+				mv "/Applications/$product.app" "$installdir/patchagent/"
+			fi
+		fi
+	fi
+
+}
+
+#Function to move the reboot task that allows chaining on HP-UX.
+#This is only to be done on HP
+moveHPRebootTask()
+{
+	if [ -f "$installdir"/patchagent/update/bin/rebootTask_HP ]
+	then
+		cp "$installdir"/patchagent/update/bin/rebootTask "$installdir"/patchagent/update/backup/rebootTask
+		mv "$installdir"/patchagent/update/bin/rebootTask_HP "$installdir"/patchagent/update/bin/rebootTask
+		if [ $? != 0 ]
+		then
+		#attempt a force
+			mv -f "$installdir"/patchagent/update/bin/rebootTask_HP "$installdir"/patchagent/update/bin/rebootTask
+		fi
+	fi
+
+}
+##############################
+##############################
+#
+# START
+#
+##############################
+##############################
+
+echo
+
+
+##############################
+##############################
+#
+# PRE-INSTALLATION STEPS
+#
+##############################
+##############################
+
+# Get properties from property file
+getProperties
+
+# Display the welcome message
+welcomeMessage
+
+ # Get the machine architecture
+getMachineArchitecture
+
+# Parse the provided arguments.
+parseArguments "$@"
+
+# Check whether agent is already installed.
+isAgentAlreadyInstalled
+
+# Do basic sanity test for all the installation types.
+doBasicSanityTests
+
+# Ensure certain directories are available.
+exportPath
+
+# Ensure that command commands are available.
+verifyCommandAvailability
+
+# Set default agent install directories
+setDefaultAgentInstallDirectories
+
+# Initialize installation variables.
+initializeInstallationVariables
+
+# Verify availability of sufficient space to install the agent.
+verifySpaceAvailability
+
+
+##############################
+##############################
+#
+# BEGIN INSTALLATION
+#
+##############################
+##############################
+
+# Expand the agent archive in the installation directory.
+expandArchive
+
+# Verify availability of Java Runtime Environment.
+checkAndMakeJavaAvailable
+
+# Get the architecture from java
+getJavaArchitecture
+
+# Do various pre-installation tasks (some specific to certain OSes)
+doVariousPreInstallationTasks
+
+# Register the agent if the install type requires that.
+registerIfRequired
+
+# If there is an asuser install modifier change the ownership of the
+# patchlink directory to that user.
+changeOwnerIfRequired
+
+# Start the agent if the current installation modifier requires that.
+startAgentIfRequired
+
+# Add control panel and Software.app for Mac OS X.
+addControlPanel
+addSoftwareApp
+
+# Move the HP only rebootTask_HP to rebootTask
+if [ "$os" = "HP-UX" ]
+then
+	moveHPRebootTask
+fi
+##############################
+##############################
+#
+# POST-INSTALLATION STEPS
+#
+##############################
+##############################
+
+# Complete post installation steps
+postInstallSteps
+
+echo
+##############################
+##############################
+#
+# END
+#
+##############################
+##############################
